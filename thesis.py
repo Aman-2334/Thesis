@@ -1,36 +1,30 @@
 import os
+import soundfile as sf
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torchaudio
 from torch.utils.data import Dataset, DataLoader
-from transformers import Wav2Vec2Processor, WhisperProcessor
-from transformers import Wav2Vec2Model, WhisperModel
-
-# Paths for audio and metadata
-audio_dir = 'dataset\\ASVspoof2019\\LA\\ASVspoof2019_LA_train\\flac'  # Adjust according to your dataset structure
-metadata_path = 'dataset\\ASVspoof2019\\LA\\ASVspoof2019_LA_cm_protocols\\ASVspoof2019.LA.cm.train.trn.txt'  # CSV or TXT with file paths and labels
-
-# Load processors
-xlsr_processor = Wav2Vec2Processor.from_pretrained('facebook/wav2vec2-xls-r-1b')
-whisper_processor = WhisperProcessor.from_pretrained('openai/whisper-base')
-
-# Load Model
-whisper_model = WhisperModel.from_pretrained('openai/whisper-base')
-xlsr_model = Wav2Vec2Model.from_pretrained('facebook/wav2vec2-xls-r-1b')
+from transformers import Wav2Vec2FeatureExtractor, WhisperProcessor, Wav2Vec2Model, WhisperModel
 
 # Custom Dataset class for ASVspoof 2019
+
+
 class ASVspoofDataset(Dataset):
-    def __init__(self, audio_dir, metadata_path, processor, sampling_rate=16000):
+    def __init__(self, audio_dir, protocol_path, processor, sampling_rate=16000):
         self.audio_dir = audio_dir
-        self.metadata = self.load_metadata(metadata_path)
+        self.metadata = self.load_metadata(protocol_path)
         self.processor = processor
         self.sampling_rate = sampling_rate
 
-    def load_metadata(self, metadata_path):
-        # Assumes metadata file has two columns: 'filename', 'label'
-        with open(metadata_path, 'r') as f:
-            data = [line.strip().split() for line in f.readlines()]
+    def load_metadata(self, protocol_path):
+        data = []
+        with open(protocol_path, 'r') as f:
+            for line in f.readlines():
+                parts = line.strip().split()
+                filename = parts[1]  # Second column is the file name
+                label = 0 if parts[4] == 'bonafide' else 1  # 'bonafide' is 0 (real), 'spoof' is 1
+                data.append((filename, label))
         return data
 
     def __len__(self):
@@ -39,7 +33,10 @@ class ASVspoofDataset(Dataset):
     def __getitem__(self, idx):
         filename, label = self.metadata[idx]
         audio_path = os.path.join(self.audio_dir, filename + '.flac')
-        waveform, sample_rate = torchaudio.load(audio_path)
+
+        # Load audio with soundfile
+        waveform, sample_rate = sf.read(audio_path)
+        waveform = torch.tensor(waveform).unsqueeze(0)  # Convert to tensor and add channel dimension
 
         # Resample if needed
         if sample_rate != self.sampling_rate:
@@ -48,11 +45,7 @@ class ASVspoofDataset(Dataset):
 
         # Process audio to get input tensors
         inputs = self.processor(waveform, sampling_rate=self.sampling_rate, return_tensors="pt", padding=True)
-        return inputs.input_values.squeeze(0), torch.tensor(int(label))  # Adjust label parsing as needed
-
-# Create DataLoader
-train_dataset = ASVspoofDataset(audio_dir, metadata_path, xlsr_processor)  # Use one processor; adjust as needed
-train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+        return inputs.input_values.squeeze(0), torch.tensor(label)
 
 # Function to extract features from PTMs
 def extract_features(model, input_values):
@@ -60,7 +53,7 @@ def extract_features(model, input_values):
         outputs = model(input_values).last_hidden_state
         return torch.mean(outputs, dim=1)  # Mean pooling
 
-# Training loop adjusted for ASVspoof 2019 dataset
+
 def train_model(model, train_loader, criterion, optimizer, num_epochs=20):
     model.train()
     for epoch in range(num_epochs):
@@ -78,32 +71,39 @@ def train_model(model, train_loader, criterion, optimizer, num_epochs=20):
             optimizer.step()
             running_loss += loss.item()
 
-        print(f'Epoch [{epoch + 1}/{num_epochs}], Loss: {running_loss / len(train_loader):.4f}')
+        print(
+            f'Epoch [{epoch + 1}/{num_epochs}], Loss: {running_loss / len(train_loader):.4f}')
 
 
 class CNNFeatureExtractor(nn.Module):
     def __init__(self, input_dim, output_dim=120):
         super(CNNFeatureExtractor, self).__init__()
         self.cnn = nn.Sequential(
-            nn.Conv1d(in_channels=input_dim, out_channels=output_dim, kernel_size=3, stride=1, padding=1),
+            nn.Conv1d(in_channels=input_dim, out_channels=output_dim,
+                      kernel_size=3, stride=1, padding=1),
             nn.ReLU(),
             nn.MaxPool1d(kernel_size=2, stride=2)
         )
 
     def forward(self, x):
         # Assuming input shape [batch_size, seq_length, input_dim]
-        x = x.permute(0, 2, 1)  # Change shape to [batch_size, input_dim, seq_length] for Conv1d
+        # Change shape to [batch_size, input_dim, seq_length] for Conv1d
+        x = x.permute(0, 2, 1)
         x = self.cnn(x)
         x = torch.mean(x, dim=2)  # Mean pooling to flatten the representation
         return x
 
 # Example of using this in the MiO model
+
+
 class MiOModel(nn.Module):
     def __init__(self, whisper_input_dim=512, xlsr_input_dim=1280, cnn_output_dim=120, output_dim=2):
         super(MiOModel, self).__init__()
-        self.whisper_cnn = CNNFeatureExtractor(whisper_input_dim, cnn_output_dim)
+        self.whisper_cnn = CNNFeatureExtractor(
+            whisper_input_dim, cnn_output_dim)
         self.xlsr_cnn = CNNFeatureExtractor(xlsr_input_dim, cnn_output_dim)
-        self.bilinear_pooling = nn.Bilinear(cnn_output_dim, cnn_output_dim, cnn_output_dim)
+        self.bilinear_pooling = nn.Bilinear(
+            cnn_output_dim, cnn_output_dim, cnn_output_dim)
         self.fc = nn.Sequential(
             nn.Linear(cnn_output_dim, 128),
             nn.ReLU(),
@@ -118,6 +118,26 @@ class MiOModel(nn.Module):
         output = self.fc(bp_result)
         return output
 
+# Paths for audio and metadata
+# Adjust according to your dataset structure
+audio_dir = 'dataset\\ASVspoof2019\\LA\\ASVspoof2019_LA_train\\flac'
+# CSV or TXT with file paths and labels
+metadata_path = 'dataset\\ASVspoof2019\\LA\\ASVspoof2019_LA_cm_protocols\\ASVspoof2019.LA.cm.train.trn.txt'
+
+# Load processors
+xlsr_feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(
+    'facebook/wav2vec2-xls-r-1b')
+whisper_processor = WhisperProcessor.from_pretrained('openai/whisper-base')
+
+# Load Model
+whisper_model = WhisperModel.from_pretrained('openai/whisper-base')
+xlsr_model = Wav2Vec2Model.from_pretrained('facebook/wav2vec2-xls-r-1b')
+
+# Create DataLoader
+# Use one processor; adjust as needed
+train_dataset = ASVspoofDataset(
+    audio_dir, metadata_path, xlsr_feature_extractor)
+train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
 # Integrating into the training loop
 model = MiOModel()
 criterion = nn.CrossEntropyLoss()

@@ -4,11 +4,23 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torchaudio
+import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from transformers import Wav2Vec2FeatureExtractor, WhisperProcessor, Wav2Vec2Model, WhisperModel
 
 # Custom Dataset class for ASVspoof 2019
+def collate_fn(batch):
+    inputs, labels = zip(*batch)  # Separate the inputs and labels
 
+    # Find the maximum length in this batch
+    max_len = max(input.size(1) for input in inputs)
+
+    # Pad all inputs to the maximum length
+    inputs_padded = [F.pad(input, (0, max_len - input.size(1))) for input in inputs]
+    inputs_padded = torch.stack(inputs_padded)
+
+    labels = torch.stack(labels)  # Stack labels as they are already of equal size
+    return inputs_padded, labels
 
 class ASVspoofDataset(Dataset):
     def __init__(self, audio_dir, protocol_path, processor, sampling_rate=16000):
@@ -53,6 +65,38 @@ def extract_features(model, input_values):
         outputs = model(input_values).last_hidden_state
         return torch.mean(outputs, dim=1)  # Mean pooling
 
+def extract_features_whisper(whisper_model, inputs, target_length=3000):
+    # Ensure `inputs` is 1D or 2D tensor (batch, samples)
+    print("Initial input shape:", inputs.shape)
+    if inputs.dim() > 2:
+        inputs = inputs.squeeze(1)  # Remove the singleton dimension (second dimension)
+    print("Reshaped input shape:", inputs.shape)
+
+    # Ensure each audio input is exactly `target_length` samples
+    processed_inputs = []
+    for waveform in inputs:
+        # print("waveform:",waveform)
+        # Pad or truncate each waveform to the target length
+        if waveform.size(0) < target_length:
+            # Pad with zeros if shorter than the target length
+            padded_waveform = F.pad(waveform, (0, target_length - waveform.size(0)), mode='constant', value=0)
+        else:
+            # Truncate if longer than the target length
+            padded_waveform = waveform[:target_length]
+        processed_inputs.append(padded_waveform)
+
+    # Stack processed inputs into a single tensor of shape [batch_size, target_length]
+    processed_inputs = torch.stack(processed_inputs)
+    print("processed_inputs shape:", processed_inputs.shape)
+
+    # Convert raw audio to mel-spectrogram using Whisper processor
+    mel_features = whisper_processor.feature_extractor(processed_inputs, sampling_rate=16000, return_tensors="pt").input_features
+    print("Mel feature shape:", mel_features.shape)
+
+    # Forward pass through Whisper model
+    with torch.no_grad():
+        output = whisper_model(mel_features)
+    return output.last_hidden_state
 
 def train_model(model, train_loader, criterion, optimizer, num_epochs=20):
     model.train()
@@ -60,7 +104,7 @@ def train_model(model, train_loader, criterion, optimizer, num_epochs=20):
         running_loss = 0.0
         for inputs, labels in train_loader:
             # Extract features from Whisper and XLS-R
-            whisper_features = extract_features(whisper_model, inputs)
+            whisper_features = extract_features_whisper(whisper_model, inputs)
             xlsr_features = extract_features(xlsr_model, inputs)
 
             # Forward pass
@@ -94,8 +138,6 @@ class CNNFeatureExtractor(nn.Module):
         return x
 
 # Example of using this in the MiO model
-
-
 class MiOModel(nn.Module):
     def __init__(self, whisper_input_dim=512, xlsr_input_dim=1280, cnn_output_dim=120, output_dim=2):
         super(MiOModel, self).__init__()
@@ -137,7 +179,7 @@ xlsr_model = Wav2Vec2Model.from_pretrained('facebook/wav2vec2-xls-r-1b')
 # Use one processor; adjust as needed
 train_dataset = ASVspoofDataset(
     audio_dir, metadata_path, xlsr_feature_extractor)
-train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True, collate_fn=collate_fn)
 # Integrating into the training loop
 model = MiOModel()
 criterion = nn.CrossEntropyLoss()

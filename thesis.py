@@ -108,42 +108,61 @@ def train_model_single_batch():
     torch.save(mio_model.state_dict(), model_save_path)
     print(f"Model saved to {model_save_path}")
 
+def extract_features(dataloader_whisper, dataloader_xlsr):
+    # Initialize lists to store features and labels
+    whisper_features_list = []
+    xlsr_features_list = []
+    labels_list = []
+
+    # Extract features from Whisper and XLS-R once
+    for (cnn_features_whisper, labels_whisper), (cnn_features_xlsr, labels_xlsr) in zip(
+        whisper_batch_generator(dataloader_whisper), xlsr_batch_generator(dataloader_xlsr)
+    ):
+        # Ensure labels match
+        assert torch.equal(labels_whisper, labels_xlsr), "Mismatch in labels between Whisper and XLS-R batches"
+        
+        # Store features and labels
+        whisper_features_list.append(cnn_features_whisper)
+        xlsr_features_list.append(cnn_features_xlsr)
+        labels_list.append(labels_whisper)
+
+    print("Feature extraction completed.")
+    return whisper_features_list, xlsr_features_list, labels_list
 
 def train_model():
+    # Batch size and data loaders
     batch_size = 32
     dataset_whisper = ASVspoofWhisperDataset(train_audio_dir, train_metadata_path)
     dataloader_whisper = DataLoader(dataset_whisper, batch_size=batch_size, shuffle=False)
     dataset_xlsr = ASVspoofXLSRDataset(train_audio_dir, train_metadata_path)
     dataloader_xlsr = DataLoader(dataset_xlsr, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
+
+    # Extract and store features once
+    whisper_features_list, xlsr_features_list, labels_list = extract_features(dataloader_whisper, dataloader_xlsr)
+
     for epoch in range(num_epochs):
         running_loss = 0.0
 
-        # Loop over batches returned from both feature extractors
-        for batch_idx, ((cnn_features_whisper, labels_whisper), (cnn_features_xlsr, labels_xlsr)) in enumerate(
-            zip(whisper_batch_generator(dataloader_whisper), xlsr_batch_generator(dataloader_xlsr))
+        # Loop through stored features and labels for each epoch
+        for batch_idx, (cnn_features_whisper, cnn_features_xlsr, labels) in enumerate(
+            zip(whisper_features_list, xlsr_features_list, labels_list)
         ):
-            # Ensure labels match between whisper and xlsr features for each batch
-            assert torch.equal(labels_whisper, labels_xlsr), f"Mismatch in labels at batch {batch_idx}"
-
             cnn_features_whisper = cnn_features_whisper.to(device)
             cnn_features_xlsr = cnn_features_xlsr.to(device)
-            labels_whisper = labels_whisper.to(device)
-            labels_xlsr = labels_xlsr.to(device)
+            labels = labels.to(device)
 
-            # Zero the parameter gradients
             optimizer.zero_grad()
 
             # Forward pass through MiO model
             outputs = mio_model(cnn_features_whisper, cnn_features_xlsr)
 
             # Compute loss
-            loss = criterion(outputs, labels_whisper)  # or labels_xlsr, both are the same
+            loss = criterion(outputs, labels)
 
             # Backward pass and optimization
             loss.backward(retain_graph=True)
             optimizer.step()
 
-            # Accumulate loss for monitoring
             running_loss += loss.item()
 
             # Print statistics every 50 batches as an example
@@ -161,46 +180,51 @@ if os.path.exists(model_save_path):
     print(f"Model loaded from {model_save_path}")
 else:
     # Train the model if it doesn't exist
-    train_model_single_batch()
-
+    train_model()
+    # train_model_single_batch()
+    # pass
 #=========================================================================TESTING=========================================================================
 # Define paths
 test_audio_dir = 'dataset\\ASVspoof2019\\LA\\ASVspoof2019_LA_eval\\flac'
 # CSV or TXT with file paths and labels
 test_metadata_path = 'dataset\\ASVspoof2019\\LA\\ASVspoof2019_LA_cm_protocols\\ASVspoof2019.LA.cm.eval.trl.txt'
 
-def evaluate_model(model, dataloader_whisper, dataloader_xlsr):
-    model.eval()  # Set the model to evaluation mode
-    all_preds = []
-    all_labels = []
+def evaluate_model():
     batch_size = 32
     dataset_whisper = ASVspoofWhisperDataset(test_audio_dir, test_metadata_path)
     dataloader_whisper = DataLoader(dataset_whisper, batch_size=batch_size, shuffle=False)
     dataset_xlsr = ASVspoofXLSRDataset(test_audio_dir, test_metadata_path)
     dataloader_xlsr = DataLoader(dataset_xlsr, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
+
+    # Step 1: Extract features once for evaluation
+    whisper_features_list, xlsr_features_list, labels_list = extract_features(dataloader_whisper, dataloader_xlsr)
+
+    mio_model.eval()  # Set the model to evaluation mode
+    all_preds = []
+    all_labels = []
+
     with torch.no_grad():  # Disable gradient computation for evaluation
-        for (cnn_features_whisper, labels_whisper), (cnn_features_xlsr, labels_xlsr) in zip(
-            whisper_batch_generator(dataloader_whisper), xlsr_batch_generator(dataloader_xlsr)
+        # Iterate over stored features and labels
+        for cnn_features_whisper, cnn_features_xlsr, labels in zip(
+            whisper_features_list, xlsr_features_list, labels_list
         ):
-            # Ensure data is on the GPU if available
             cnn_features_whisper = cnn_features_whisper.to(device)
             cnn_features_xlsr = cnn_features_xlsr.to(device)
-            labels_whisper = labels_whisper.to(device)
-            labels_xlsr = labels_xlsr.to(device)
+            labels = labels.to(device)
 
             # Forward pass through the MiO model
-            outputs = model(cnn_features_whisper, cnn_features_xlsr)
+            outputs = mio_model(cnn_features_whisper, cnn_features_xlsr)
             _, predicted = torch.max(outputs, 1)  # Get predicted class
 
             # Append predictions and labels to lists
             all_preds.extend(predicted.cpu().numpy())
-            all_labels.extend(labels_whisper.cpu().numpy())
+            all_labels.extend(labels.cpu().numpy())
 
     # Calculate evaluation metrics
     accuracy = accuracy_score(all_labels, all_preds)
-    precision = precision_score(all_labels, all_preds, average='binary')
-    recall = recall_score(all_labels, all_preds, average='binary')
-    f1 = f1_score(all_labels, all_preds, average='binary')
+    precision = precision_score(all_labels, all_preds, average='binary', zero_division=1)
+    recall = recall_score(all_labels, all_preds, average='binary', zero_division=1)
+    f1 = f1_score(all_labels, all_preds, average='binary', zero_division=1)
 
     print(f"Accuracy: {accuracy:.4f}")
     print(f"Precision: {precision:.4f}")
@@ -245,5 +269,8 @@ def test_model_single_batch():
 
     print(f"Single Batch Test Metrics -> Accuracy: {accuracy:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1 Score: {f1:.4f}")
 
-# evaluate_model()
-test_model_single_batch()
+evaluate_model()
+# test_model_single_batch()
+# print("torch cuda",torch.cuda.is_available())
+
+#=========================================================================TWO STAGE PROCESS=========================================================================

@@ -6,9 +6,12 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from transformers import Wav2Vec2Model, Wav2Vec2FeatureExtractor
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {device}")
+
 # Load XLS-R model and processor
 print("Loading XLS-R model and processor...")
-xlsr_model = Wav2Vec2Model.from_pretrained('facebook/wav2vec2-xls-r-1b')
+xlsr_model = Wav2Vec2Model.from_pretrained('facebook/wav2vec2-xls-r-1b').to(device)
 xlsr_feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained('facebook/wav2vec2-xls-r-1b')
 print("XLS-R model and processor loaded successfully.")
 
@@ -56,26 +59,6 @@ class ASVspoofXLSRDataset(Dataset):
         
         return inputs.input_values.squeeze(0), label  # Remove batch dimension for single sample
 
-def collate_fn(batch):
-    inputs, labels = zip(*batch)  # Separate inputs and labels
-    # Find the maximum length in the batch
-    max_length = max(input.size(0) for input in inputs)
-    # Pad all inputs to the maximum length
-    inputs_padded = [F.pad(input, (0, max_length - input.size(0))) for input in inputs]
-    inputs_padded = torch.stack(inputs_padded)  # Stack into a single tensor
-    labels = torch.tensor(labels)  # Convert labels to tensor
-    return inputs_padded, labels
-
-# Define paths
-audio_dir = 'dataset\\ASVspoof2019\\LA\\ASVspoof2019_LA_train\\flac'
-# CSV or TXT with file paths and labels
-metadata_path = 'dataset\\ASVspoof2019\\LA\\ASVspoof2019_LA_cm_protocols\\ASVspoof2019.LA.cm.train.trn.txt'
-
-# Create the dataset and DataLoader
-batch_size = 32
-dataset = ASVspoofXLSRDataset(audio_dir, metadata_path)
-dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
-
 class CNNFeatureExtractor(nn.Module):
     def __init__(self, input_dim, output_dim=120):
         super(CNNFeatureExtractor, self).__init__()
@@ -99,10 +82,14 @@ class CNNFeatureExtractor(nn.Module):
         return x
 
 # Extract features and inspect
-def xlsr_batch_generator():
+def xlsr_batch_generator(dataloader):
     print("Starting XLS-R feature extraction...")
     for batch_idx, (input_values, labels) in enumerate(dataloader):
         print(f"Processing batch {batch_idx + 1}/{len(dataloader)}")
+
+        # Move input values and labels to GPU
+        input_values = input_values.to(device)
+        labels = labels.to(device)
 
         with torch.no_grad():
             # Pass waveforms through XLS-R model to extract encoder features
@@ -115,7 +102,7 @@ def xlsr_batch_generator():
         print("XLS-R encoder feature shape:", xlsr_features.shape)  # [batch_size, seq_length, hidden_size]
         print("Labels:", labels)
         # xlsr_features is the output from XLS-R model with shape [batch_size, seq_length, hidden_size]
-        cnn_extractor = CNNFeatureExtractor(input_dim=xlsr_features.shape[2], output_dim=120) #input_dim = hidden_size
+        cnn_extractor = CNNFeatureExtractor(input_dim=xlsr_features.shape[2], output_dim=120).to(device) #input_dim = hidden_size
         cnn_features = cnn_extractor(xlsr_features)
         print("CNN-extracted features shape:", cnn_features.shape)
         yield cnn_features,labels

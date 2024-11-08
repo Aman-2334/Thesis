@@ -1,6 +1,7 @@
 import os
 import torch
 import torchaudio
+import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from transformers import Wav2Vec2Model, Wav2Vec2FeatureExtractor
@@ -71,26 +72,51 @@ audio_dir = 'dataset\\ASVspoof2019\\LA\\ASVspoof2019_LA_train\\flac'
 metadata_path = 'dataset\\ASVspoof2019\\LA\\ASVspoof2019_LA_cm_protocols\\ASVspoof2019.LA.cm.train.trn.txt'
 
 # Create the dataset and DataLoader
+batch_size = 32
 dataset = ASVspoofXLSRDataset(audio_dir, metadata_path)
-dataloader = DataLoader(dataset, batch_size=32, shuffle=False, collate_fn=collate_fn)
+dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
+
+class CNNFeatureExtractor(nn.Module):
+    def __init__(self, input_dim, output_dim=120):
+        super(CNNFeatureExtractor, self).__init__()
+        self.cnn = nn.Sequential(
+            nn.Conv1d(in_channels=input_dim, out_channels=output_dim, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.MaxPool1d(kernel_size=2, stride=2)
+        )
+
+    def forward(self, x):
+        # Input shape: [batch_size, seq_length, input_dim]
+        # Rearrange to [batch_size, input_dim, seq_length] for Conv1d
+        x = x.permute(0, 2, 1)  # Change shape to [batch_size, input_dim, seq_length]
+        
+        # Apply the 1D CNN and MaxPool
+        x = self.cnn(x)
+        
+        # Optional: Use mean pooling to get a fixed-size output
+        x = torch.mean(x, dim=2)  # [batch_size, output_dim]
+        
+        return x
 
 # Extract features and inspect
-print("Starting XLS-R feature extraction...")
-for batch_idx, (input_values, labels) in enumerate(dataloader):
-    print(f"Processing batch {batch_idx + 1}/{len(dataloader)}")
+def xlsr_batch_generator():
+    print("Starting XLS-R feature extraction...")
+    for batch_idx, (input_values, labels) in enumerate(dataloader):
+        print(f"Processing batch {batch_idx + 1}/{len(dataloader)}")
 
-    with torch.no_grad():
-        # Pass waveforms through XLS-R model to extract encoder features
-        xlsr_outputs = xlsr_model(input_values)
-        
-        # Extract last hidden state from XLS-R encoder
-        xlsr_features = xlsr_outputs.last_hidden_state
+        with torch.no_grad():
+            # Pass waveforms through XLS-R model to extract encoder features
+            xlsr_outputs = xlsr_model(input_values)
 
-    # Print shape of extracted features and labels to confirm
-    print("XLS-R encoder feature shape:", xlsr_features.shape)  # [batch_size, seq_length, hidden_size]
-    print("Labels:", labels)
-    
-    # For demonstration, process just one batch
-    break
+            # Extract last hidden state from XLS-R encoder
+            xlsr_features = xlsr_outputs.last_hidden_state
 
-print("XLS-R feature extraction completed.")
+        # Print shape of extracted features and labels to confirm
+        print("XLS-R encoder feature shape:", xlsr_features.shape)  # [batch_size, seq_length, hidden_size]
+        print("Labels:", labels)
+        # xlsr_features is the output from XLS-R model with shape [batch_size, seq_length, hidden_size]
+        cnn_extractor = CNNFeatureExtractor(input_dim=xlsr_features.shape[2], output_dim=120) #input_dim = hidden_size
+        cnn_features = cnn_extractor(xlsr_features)
+        print("CNN-extracted features shape:", cnn_features.shape)
+        yield cnn_features,labels
+    print("XLS-R feature extraction with 1D CNN completed.")

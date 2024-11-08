@@ -102,6 +102,7 @@ def whisper_batch_generator(dataloader):
         print(f"Processing batch {batch_idx + 1}/{len(dataloader)}")
 
         mel_features = mel_features.to(device)
+        labels = labels.to(device)
         with torch.no_grad():
             # Pass mel-spectrograms through Whisper model
             whisper_encoder_outputs = whisper_model.encoder(mel_features)

@@ -4,7 +4,7 @@
 Keeping track of my thesis
 
 ## Venv Setup
-pip install torch soundfile transformers pydub
+pip install torch soundfile transformers pydub scikit-learn
 
 torchaudio wasnt able to handle flac files so using soundfile instead
 

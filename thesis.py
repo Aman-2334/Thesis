@@ -68,46 +68,6 @@ optimizer = optim.Adam(mio_model.parameters(), lr=0.001)
 
 num_epochs = 10  # Adjust based on your requirements
 
-def train_model_single_batch():
-    batch_size = 32
-    dataset_whisper = ASVspoofWhisperDataset(train_audio_dir, train_metadata_path)
-    dataloader_whisper = DataLoader(dataset_whisper, batch_size=batch_size, shuffle=False)
-    dataset_xlsr = ASVspoofXLSRDataset(train_audio_dir, train_metadata_path)
-    dataloader_xlsr = DataLoader(dataset_xlsr, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
-
-    # Get the first batch from both Whisper and XLS-R
-    whisper_batch = next(iter(whisper_batch_generator(dataloader_whisper)))
-    xlsr_batch = next(iter(xlsr_batch_generator(dataloader_xlsr)))
-    cnn_features_whisper, labels_whisper = whisper_batch
-    cnn_features_xlsr, labels_xlsr = xlsr_batch
-
-    assert torch.equal(labels_whisper, labels_xlsr), "Mismatch in labels for the single batch"
-
-    cnn_features_whisper = cnn_features_whisper.to(device)
-    cnn_features_xlsr = cnn_features_xlsr.to(device)
-    labels_whisper = labels_whisper.to(device)
-    labels_xlsr = labels_xlsr.to(device)
-
-    for epoch in range(num_epochs):
-        optimizer.zero_grad()
-
-        # Forward pass through MiO model
-        outputs = mio_model(cnn_features_whisper, cnn_features_xlsr)
-
-        # Compute loss
-        loss = criterion(outputs, labels_whisper)
-
-        # Backward pass and optimization
-        loss.backward(retain_graph=True)
-        optimizer.step()
-
-        print(f'Epoch [{epoch + 1}/{num_epochs}], Loss: {loss.item():.4f}')
-
-    print("Training on a single batch completed.")
-    # Save the model after training
-    torch.save(mio_model.state_dict(), model_save_path)
-    print(f"Model saved to {model_save_path}")
-
 def extract_features(dataloader_whisper, dataloader_xlsr):
     # Initialize lists to store features and labels
     whisper_features_list = []
@@ -131,7 +91,7 @@ def extract_features(dataloader_whisper, dataloader_xlsr):
 
 def train_model():
     # Batch size and data loaders
-    batch_size = 32
+    batch_size = 16
     dataset_whisper = ASVspoofWhisperDataset(train_audio_dir, train_metadata_path)
     dataloader_whisper = DataLoader(dataset_whisper, batch_size=batch_size, shuffle=False)
     dataset_xlsr = ASVspoofXLSRDataset(train_audio_dir, train_metadata_path)
@@ -181,8 +141,7 @@ if os.path.exists(model_save_path):
 else:
     # Train the model if it doesn't exist
     train_model()
-    # train_model_single_batch()
-    # pass
+
 #=========================================================================TESTING=========================================================================
 # Define paths
 test_audio_dir = 'dataset\\ASVspoof2019\\LA\\ASVspoof2019_LA_eval\\flac'
@@ -190,7 +149,7 @@ test_audio_dir = 'dataset\\ASVspoof2019\\LA\\ASVspoof2019_LA_eval\\flac'
 test_metadata_path = 'dataset\\ASVspoof2019\\LA\\ASVspoof2019_LA_cm_protocols\\ASVspoof2019.LA.cm.eval.trl.txt'
 
 def evaluate_model():
-    batch_size = 32
+    batch_size = 16
     dataset_whisper = ASVspoofWhisperDataset(test_audio_dir, test_metadata_path)
     dataloader_whisper = DataLoader(dataset_whisper, batch_size=batch_size, shuffle=False)
     dataset_xlsr = ASVspoofXLSRDataset(test_audio_dir, test_metadata_path)
@@ -233,99 +192,62 @@ def evaluate_model():
 
     return accuracy, precision, recall, f1
 
-def test_model_single_batch():
-    mio_model.eval()  # Set model to evaluation mode
-
-    batch_size = 32
-    dataset_whisper = ASVspoofWhisperDataset(test_audio_dir, test_metadata_path)
-    dataloader_whisper = DataLoader(dataset_whisper, batch_size=batch_size, shuffle=False)
-    dataset_xlsr = ASVspoofXLSRDataset(test_audio_dir, test_metadata_path)
-    dataloader_xlsr = DataLoader(dataset_xlsr, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
-
-    whisper_batch = next(iter(whisper_batch_generator(dataloader_whisper)))
-    xlsr_batch = next(iter(xlsr_batch_generator(dataloader_xlsr)))
-    cnn_features_whisper, labels_whisper = whisper_batch
-    cnn_features_xlsr, labels_xlsr = xlsr_batch
-
-    cnn_features_whisper = cnn_features_whisper.to(device)
-    cnn_features_xlsr = cnn_features_xlsr.to(device)
-    labels_whisper = labels_whisper.to(device)
-    labels_xlsr = labels_xlsr.to(device)
-
-    with torch.no_grad():
-        # Forward pass through MiO model
-        outputs = mio_model(cnn_features_whisper, cnn_features_xlsr)
-        _, predicted = torch.max(outputs, 1)
-
-        # Move predictions and labels to CPU for metrics calculation
-        all_preds = predicted.cpu().numpy()
-        all_labels = labels_whisper.cpu().numpy()
-
-    # Calculate metrics
-    accuracy = accuracy_score(all_labels, all_preds)
-    precision = precision_score(all_labels, all_preds, average='binary')
-    recall = recall_score(all_labels, all_preds, average='binary')
-    f1 = f1_score(all_labels, all_preds, average='binary')
-
-    print(f"Single Batch Test Metrics -> Accuracy: {accuracy:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1 Score: {f1:.4f}")
-
 evaluate_model()
-# test_model_single_batch()
 # print("torch cuda",torch.cuda.is_available())
 
 #=========================================================================TWO STAGE PROCESS=========================================================================
-for param in mio_model.parameters():
-    param.requires_grad = False
+# for param in mio_model.parameters():
+#     param.requires_grad = False
 
-print("MiO model backbone has been frozen for feature extraction.")
+# print("MiO model backbone has been frozen for feature extraction.")
 
-class ClassificationHead(nn.Module):
-    def __init__(self, input_dim, num_classes):
-        super(ClassificationHead, self).__init__()
-        self.fc = nn.Sequential(
-            nn.Linear(input_dim, 128),
-            nn.ReLU(),
-            nn.Linear(128, num_classes)
-        )
+# class ClassificationHead(nn.Module):
+#     def __init__(self, input_dim, num_classes):
+#         super(ClassificationHead, self).__init__()
+#         self.fc = nn.Sequential(
+#             nn.Linear(input_dim, 128),
+#             nn.ReLU(),
+#             nn.Linear(128, num_classes)
+#         )
 
-    def forward(self, x):
-        return self.fc(x)
+#     def forward(self, x):
+#         return self.fc(x)
 
-# Define classification heads for different tasks
-input_dim = 120  # Set to the output dimension of MiO's CNN output
-input_type_head = ClassificationHead(input_dim, num_classes=3)  # e.g., speech, text, bonafide
-acoustic_model_head = ClassificationHead(input_dim, num_classes=5)  # Number of acoustic model classes
-vocoder_head = ClassificationHead(input_dim, num_classes=5)  # Number of vocoder classes
+# # Define classification heads for different tasks
+# input_dim = 120  # Set to the output dimension of MiO's CNN output
+# input_type_head = ClassificationHead(input_dim, num_classes=3)  # e.g., speech, text, bonafide
+# acoustic_model_head = ClassificationHead(input_dim, num_classes=5)  # Number of acoustic model classes
+# vocoder_head = ClassificationHead(input_dim, num_classes=5)  # Number of vocoder classes
 
-# Move classification heads to the same device as MiO model
-input_type_head.to(device)
-acoustic_model_head.to(device)
-vocoder_head.to(device)
+# # Move classification heads to the same device as MiO model
+# input_type_head.to(device)
+# acoustic_model_head.to(device)
+# vocoder_head.to(device)
 
-def train_classification_head(head, dataloader, criterion, optimizer, num_epochs=10):
-    head.train()
-    for epoch in range(num_epochs):
-        running_loss = 0.0
-        for batch_idx, (embeddings, labels) in enumerate(dataloader):
-            embeddings, labels = embeddings.to(device), labels.to(device)
+# def train_classification_head(head, dataloader, criterion, optimizer, num_epochs=10):
+#     head.train()
+#     for epoch in range(num_epochs):
+#         running_loss = 0.0
+#         for batch_idx, (embeddings, labels) in enumerate(dataloader):
+#             embeddings, labels = embeddings.to(device), labels.to(device)
             
-            optimizer.zero_grad()
-            outputs = head(embeddings)
-            loss = criterion(outputs, labels)
-            loss.backward()
-            optimizer.step()
+#             optimizer.zero_grad()
+#             outputs = head(embeddings)
+#             loss = criterion(outputs, labels)
+#             loss.backward()
+#             optimizer.step()
             
-            running_loss += loss.item()
+#             running_loss += loss.item()
         
-        print(f'Epoch [{epoch + 1}/{num_epochs}], Loss: {running_loss / len(dataloader):.4f}')
+#         print(f'Epoch [{epoch + 1}/{num_epochs}], Loss: {running_loss / len(dataloader):.4f}')
 
-# Optimizers and Loss for each head
-criterion = nn.CrossEntropyLoss()
+# # Optimizers and Loss for each head
+# criterion = nn.CrossEntropyLoss()
 
-# Optimizers for each task-specific head
-input_type_optimizer = torch.optim.Adam(input_type_head.parameters(), lr=0.001)
-acoustic_model_optimizer = torch.optim.Adam(acoustic_model_head.parameters(), lr=0.001)
-vocoder_optimizer = torch.optim.Adam(vocoder_head.parameters(), lr=0.001)
+# # Optimizers for each task-specific head
+# input_type_optimizer = torch.optim.Adam(input_type_head.parameters(), lr=0.001)
+# acoustic_model_optimizer = torch.optim.Adam(acoustic_model_head.parameters(), lr=0.001)
+# vocoder_optimizer = torch.optim.Adam(vocoder_head.parameters(), lr=0.001)
 
 # Assuming dataloaders for each task
 # train_classification_head(input_type_head, input_type_dataloader, criterion, input_type_optimizer)

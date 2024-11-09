@@ -97,24 +97,30 @@ class CNNFeatureExtractor(nn.Module):
     
 # Extract features and inspect
 def whisper_batch_generator(dataloader):
-    print("Starting feature extraction...")
+    print("Starting whisper feature extraction...")
     for batch_idx, (mel_features, labels) in enumerate(dataloader):
         print(f"Processing whisper batch {batch_idx + 1}/{len(dataloader)}")
 
+        # Move data to GPU
         mel_features = mel_features.to(device)
         labels = labels.to(device)
+
         with torch.no_grad():
             # Pass mel-spectrograms through Whisper model
             whisper_encoder_outputs = whisper_model.encoder(mel_features)
             whisper_features = whisper_encoder_outputs.last_hidden_state  # Extract last hidden state
 
-        # Print shape of extracted features and labels to confirm
-        # print("Whisper encoder feature shape:", whisper_features.shape)  # [batch_size, seq_length, hidden_size]
-        # print("Labels:", labels)
-        # whisper_features is the output from whisper model with shape [batch_size, seq_length, hidden_size]
-        cnn_extractor = CNNFeatureExtractor(input_dim=whisper_features.shape[2], output_dim=120).to(device) #input_dim = hidden_size
+        # Apply CNN extraction
+        cnn_extractor = CNNFeatureExtractor(input_dim=whisper_features.shape[2], output_dim=120).to(device)
         cnn_features = cnn_extractor(whisper_features)
-        # print("CNN-extracted features shape:", cnn_features.shape)
-        yield cnn_features,labels
-    print("whisper feature extraction with 1D CNN completed.")
+
+        # Move features and labels back to CPU and clear GPU memory
+        cnn_features = cnn_features.cpu()
+        labels = labels.cpu()
+        del mel_features, whisper_features, whisper_encoder_outputs, cnn_extractor
+        torch.cuda.empty_cache()
+
+        yield cnn_features, labels
+
+    print("Whisper feature extraction with 1D CNN completed.")
 

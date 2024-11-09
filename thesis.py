@@ -69,7 +69,7 @@ optimizer = optim.Adam(mio_model.parameters(), lr=0.001)
 num_epochs = 10  # Adjust based on your requirements
 
 def extract_features(dataloader_whisper, dataloader_xlsr):
-    # Initialize lists to store features and labels
+    # Initialize lists to store features and labels (on CPU to avoid GPU memory buildup)
     whisper_features_list = []
     xlsr_features_list = []
     labels_list = []
@@ -81,17 +81,21 @@ def extract_features(dataloader_whisper, dataloader_xlsr):
         # Ensure labels match
         assert torch.equal(labels_whisper, labels_xlsr), "Mismatch in labels between Whisper and XLS-R batches"
         
-        # Store features and labels
-        whisper_features_list.append(cnn_features_whisper)
-        xlsr_features_list.append(cnn_features_xlsr)
-        labels_list.append(labels_whisper)
+        # Move features and labels to CPU before appending
+        whisper_features_list.append(cnn_features_whisper.cpu())
+        xlsr_features_list.append(cnn_features_xlsr.cpu())
+        labels_list.append(labels_whisper.cpu())
+
+        # Explicitly delete GPU tensors and clear cache
+        del cnn_features_whisper, labels_whisper, cnn_features_xlsr, labels_xlsr
+        torch.cuda.empty_cache()
 
     print("Feature extraction completed.")
     return whisper_features_list, xlsr_features_list, labels_list
 
 def train_model():
     # Batch size and data loaders
-    batch_size = 32
+    batch_size = 16
     dataset_whisper = ASVspoofWhisperDataset(train_audio_dir, train_metadata_path)
     dataloader_whisper = DataLoader(dataset_whisper, batch_size=batch_size, shuffle=False)
     dataset_xlsr = ASVspoofXLSRDataset(train_audio_dir, train_metadata_path)
@@ -149,7 +153,7 @@ test_audio_dir = 'dataset\\ASVspoof2019\\LA\\ASVspoof2019_LA_eval\\flac'
 test_metadata_path = 'dataset\\ASVspoof2019\\LA\\ASVspoof2019_LA_cm_protocols\\ASVspoof2019.LA.cm.eval.trl.txt'
 
 def evaluate_model():
-    batch_size = 32
+    batch_size = 16
     dataset_whisper = ASVspoofWhisperDataset(test_audio_dir, test_metadata_path)
     dataloader_whisper = DataLoader(dataset_whisper, batch_size=batch_size, shuffle=False)
     dataset_xlsr = ASVspoofXLSRDataset(test_audio_dir, test_metadata_path)
@@ -194,6 +198,3 @@ def evaluate_model():
 
 evaluate_model()
 # print("torch cuda",torch.cuda.is_available())
-
-#=========================================================================TWO STAGE PROCESS=========================================================================
-

@@ -328,6 +328,6 @@ acoustic_model_optimizer = torch.optim.Adam(acoustic_model_head.parameters(), lr
 vocoder_optimizer = torch.optim.Adam(vocoder_head.parameters(), lr=0.001)
 
 # Assuming dataloaders for each task
-train_classification_head(input_type_head, input_type_dataloader, criterion, input_type_optimizer)
-train_classification_head(acoustic_model_head, acoustic_model_dataloader, criterion, acoustic_model_optimizer)
-train_classification_head(vocoder_head, vocoder_dataloader, criterion, vocoder_optimizer)
+# train_classification_head(input_type_head, input_type_dataloader, criterion, input_type_optimizer)
+# train_classification_head(acoustic_model_head, acoustic_model_dataloader, criterion, acoustic_model_optimizer)
+# train_classification_head(vocoder_head, vocoder_dataloader, criterion, vocoder_optimizer)

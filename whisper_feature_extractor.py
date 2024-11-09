@@ -44,13 +44,13 @@ class ASVspoofWhisperDataset(Dataset):
         
         # Load the audio file
         waveform, sample_rate = torchaudio.load(audio_path)
-        print(f"Loaded audio file: {audio_path}")
+        # print(f"Loaded audio file: {audio_path}")
 
         # Resample if needed
         if sample_rate != self.sampling_rate:
             resampler = torchaudio.transforms.Resample(orig_freq=sample_rate, new_freq=self.sampling_rate)
             waveform = resampler(waveform)
-            print(f"Resampled audio to {self.sampling_rate} Hz.")
+            # print(f"Resampled audio to {self.sampling_rate} Hz.")
 
         # Remove extra dimensions if needed
         waveform = waveform.squeeze(0)
@@ -66,10 +66,10 @@ class ASVspoofWhisperDataset(Dataset):
         if mel_features.size(-1) < self.target_length:
             padding = self.target_length - mel_features.size(-1)
             mel_features = F.pad(mel_features, (0, padding), mode='constant', value=0)
-            print(f"Padded mel-spectrogram to length {self.target_length}.")
+            # print(f"Padded mel-spectrogram to length {self.target_length}.")
         else:
             mel_features = mel_features[:, :self.target_length]
-            print(f"Truncated mel-spectrogram to length {self.target_length}.")
+            # print(f"Truncated mel-spectrogram to length {self.target_length}.")
 
         return mel_features, label
 
@@ -99,7 +99,7 @@ class CNNFeatureExtractor(nn.Module):
 def whisper_batch_generator(dataloader):
     print("Starting feature extraction...")
     for batch_idx, (mel_features, labels) in enumerate(dataloader):
-        print(f"Processing batch {batch_idx + 1}/{len(dataloader)}")
+        print(f"Processing whisper batch {batch_idx + 1}/{len(dataloader)}")
 
         mel_features = mel_features.to(device)
         labels = labels.to(device)
@@ -109,12 +109,12 @@ def whisper_batch_generator(dataloader):
             whisper_features = whisper_encoder_outputs.last_hidden_state  # Extract last hidden state
 
         # Print shape of extracted features and labels to confirm
-        print("Whisper encoder feature shape:", whisper_features.shape)  # [batch_size, seq_length, hidden_size]
-        print("Labels:", labels)
+        # print("Whisper encoder feature shape:", whisper_features.shape)  # [batch_size, seq_length, hidden_size]
+        # print("Labels:", labels)
         # whisper_features is the output from whisper model with shape [batch_size, seq_length, hidden_size]
         cnn_extractor = CNNFeatureExtractor(input_dim=whisper_features.shape[2], output_dim=120).to(device) #input_dim = hidden_size
         cnn_features = cnn_extractor(whisper_features)
-        print("CNN-extracted features shape:", cnn_features.shape)
+        # print("CNN-extracted features shape:", cnn_features.shape)
         yield cnn_features,labels
     print("whisper feature extraction with 1D CNN completed.")
 

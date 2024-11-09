@@ -68,46 +68,6 @@ optimizer = optim.Adam(mio_model.parameters(), lr=0.001)
 
 num_epochs = 10  # Adjust based on your requirements
 
-def train_model_single_batch():
-    batch_size = 32
-    dataset_whisper = ASVspoofWhisperDataset(train_audio_dir, train_metadata_path)
-    dataloader_whisper = DataLoader(dataset_whisper, batch_size=batch_size, shuffle=False)
-    dataset_xlsr = ASVspoofXLSRDataset(train_audio_dir, train_metadata_path)
-    dataloader_xlsr = DataLoader(dataset_xlsr, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
-
-    # Get the first batch from both Whisper and XLS-R
-    whisper_batch = next(iter(whisper_batch_generator(dataloader_whisper)))
-    xlsr_batch = next(iter(xlsr_batch_generator(dataloader_xlsr)))
-    cnn_features_whisper, labels_whisper = whisper_batch
-    cnn_features_xlsr, labels_xlsr = xlsr_batch
-
-    assert torch.equal(labels_whisper, labels_xlsr), "Mismatch in labels for the single batch"
-
-    cnn_features_whisper = cnn_features_whisper.to(device)
-    cnn_features_xlsr = cnn_features_xlsr.to(device)
-    labels_whisper = labels_whisper.to(device)
-    labels_xlsr = labels_xlsr.to(device)
-
-    for epoch in range(num_epochs):
-        optimizer.zero_grad()
-
-        # Forward pass through MiO model
-        outputs = mio_model(cnn_features_whisper, cnn_features_xlsr)
-
-        # Compute loss
-        loss = criterion(outputs, labels_whisper)
-
-        # Backward pass and optimization
-        loss.backward(retain_graph=True)
-        optimizer.step()
-
-        print(f'Epoch [{epoch + 1}/{num_epochs}], Loss: {loss.item():.4f}')
-
-    print("Training on a single batch completed.")
-    # Save the model after training
-    torch.save(mio_model.state_dict(), model_save_path)
-    print(f"Model saved to {model_save_path}")
-
 def extract_features(dataloader_whisper, dataloader_xlsr):
     # Initialize lists to store features and labels
     whisper_features_list = []
@@ -181,8 +141,7 @@ if os.path.exists(model_save_path):
 else:
     # Train the model if it doesn't exist
     train_model()
-    # train_model_single_batch()
-    # pass
+
 #=========================================================================TESTING=========================================================================
 # Define paths
 test_audio_dir = 'dataset\\ASVspoof2019\\LA\\ASVspoof2019_LA_eval\\flac'
@@ -233,44 +192,8 @@ def evaluate_model():
 
     return accuracy, precision, recall, f1
 
-def test_model_single_batch():
-    mio_model.eval()  # Set model to evaluation mode
-
-    batch_size = 32
-    dataset_whisper = ASVspoofWhisperDataset(test_audio_dir, test_metadata_path)
-    dataloader_whisper = DataLoader(dataset_whisper, batch_size=batch_size, shuffle=False)
-    dataset_xlsr = ASVspoofXLSRDataset(test_audio_dir, test_metadata_path)
-    dataloader_xlsr = DataLoader(dataset_xlsr, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
-
-    whisper_batch = next(iter(whisper_batch_generator(dataloader_whisper)))
-    xlsr_batch = next(iter(xlsr_batch_generator(dataloader_xlsr)))
-    cnn_features_whisper, labels_whisper = whisper_batch
-    cnn_features_xlsr, labels_xlsr = xlsr_batch
-
-    cnn_features_whisper = cnn_features_whisper.to(device)
-    cnn_features_xlsr = cnn_features_xlsr.to(device)
-    labels_whisper = labels_whisper.to(device)
-    labels_xlsr = labels_xlsr.to(device)
-
-    with torch.no_grad():
-        # Forward pass through MiO model
-        outputs = mio_model(cnn_features_whisper, cnn_features_xlsr)
-        _, predicted = torch.max(outputs, 1)
-
-        # Move predictions and labels to CPU for metrics calculation
-        all_preds = predicted.cpu().numpy()
-        all_labels = labels_whisper.cpu().numpy()
-
-    # Calculate metrics
-    accuracy = accuracy_score(all_labels, all_preds)
-    precision = precision_score(all_labels, all_preds, average='binary')
-    recall = recall_score(all_labels, all_preds, average='binary')
-    f1 = f1_score(all_labels, all_preds, average='binary')
-
-    print(f"Single Batch Test Metrics -> Accuracy: {accuracy:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1 Score: {f1:.4f}")
-
 evaluate_model()
-# test_model_single_batch()
 # print("torch cuda",torch.cuda.is_available())
 
 #=========================================================================TWO STAGE PROCESS=========================================================================
+

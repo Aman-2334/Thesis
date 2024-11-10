@@ -84,6 +84,7 @@ class CNNFeatureExtractor(nn.Module):
 # Extract features and inspect
 def xlsr_batch_generator(dataloader):
     print("Starting XLS-R feature extraction...")
+    cnn_extractor = CNNFeatureExtractor(input_dim=1280, output_dim=120).to(device)
     for batch_idx, (input_values, labels) in enumerate(dataloader):
         print(f"Processing xlsr batch {batch_idx + 1}/{len(dataloader)}")
 
@@ -95,17 +96,17 @@ def xlsr_batch_generator(dataloader):
             # Pass waveforms through XLS-R model to extract encoder features
             xlsr_outputs = xlsr_model(input_values)
             xlsr_features = xlsr_outputs.last_hidden_state  # Extract last hidden state
-
+        
+        print("XLS-R encoder feature shape:", xlsr_features.shape)  # [batch_size, seq_length, hidden_size]
         # Apply CNN extraction
-        cnn_extractor = CNNFeatureExtractor(input_dim=xlsr_features.shape[2], output_dim=120).to(device)
         cnn_features = cnn_extractor(xlsr_features)
 
         # Move features and labels back to CPU and clear GPU memory
         cnn_features = cnn_features.cpu()
         labels = labels.cpu()
-        del input_values, xlsr_features, xlsr_outputs, cnn_extractor
+        del input_values, xlsr_features, xlsr_outputs
         torch.cuda.empty_cache()
 
         yield cnn_features, labels
-
+    del cnn_extractor
     print("XLS-R feature extraction with 1D CNN completed.")

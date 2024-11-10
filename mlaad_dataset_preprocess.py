@@ -197,7 +197,6 @@ def create_simpler_meta_files():
                     collect_unique_models(model_path)
                     collect_unique_architecture(model_path)
 
-
     # Convert the set to a sorted list
     unique_model_list = sorted(unique_models)
     unique_architecture_list = sorted(unique_architecture)

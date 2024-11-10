@@ -98,6 +98,7 @@ class CNNFeatureExtractor(nn.Module):
 # Extract features and inspect
 def whisper_batch_generator(dataloader):
     print("Starting whisper feature extraction...")
+    cnn_extractor = CNNFeatureExtractor(input_dim=512, output_dim=120).to(device)
     for batch_idx, (mel_features, labels) in enumerate(dataloader):
         print(f"Processing whisper batch {batch_idx + 1}/{len(dataloader)}")
 
@@ -109,18 +110,17 @@ def whisper_batch_generator(dataloader):
             # Pass mel-spectrograms through Whisper model
             whisper_encoder_outputs = whisper_model.encoder(mel_features)
             whisper_features = whisper_encoder_outputs.last_hidden_state  # Extract last hidden state
-
+        print("Whisper encoder feature shape:", whisper_features.shape)  # [batch_size, seq_length, hidden_size]
         # Apply CNN extraction
-        cnn_extractor = CNNFeatureExtractor(input_dim=whisper_features.shape[2], output_dim=120).to(device)
         cnn_features = cnn_extractor(whisper_features)
 
         # Move features and labels back to CPU and clear GPU memory
         cnn_features = cnn_features.cpu()
         labels = labels.cpu()
-        del mel_features, whisper_features, whisper_encoder_outputs, cnn_extractor
+        del mel_features, whisper_features, whisper_encoder_outputs
         torch.cuda.empty_cache()
 
         yield cnn_features, labels
-
+    del cnn_extractor
     print("Whisper feature extraction with 1D CNN completed.")
 

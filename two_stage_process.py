@@ -86,8 +86,8 @@ def extract_features_with_mio(audio_path, mio_model):
 
 
 class MLAADDataset(Dataset):
-    def __init__(self, meta_file, root_dir, mio_model, label_type="acoustic"):
-        self.data = pd.read_csv(meta_file)
+    def __init__(self, meta_df, root_dir, mio_model, label_type="acoustic"):
+        self.data = pd.DataFrame(meta_df)
         self.root_dir = root_dir
         self.mio_model = mio_model  # Pass the frozen MiO model to the dataset
         self.label_type = label_type  # "acoustic" or "vocoder"
@@ -106,9 +106,9 @@ class MLAADDataset(Dataset):
         return feature_tensor, torch.tensor(label, dtype=torch.long)
 
 # Stage 2: Train Lightweight Classification Head for Component Classification
-def train_classification_head(classifier, train_loader, eval_loader, num_epochs=10):
+def train_classification_head(classifier, train_loader, num_epochs=10, learning_rate=0.001):
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(classifier.parameters(), lr=0.001)
+    optimizer = optim.Adam(classifier.parameters(), lr=learning_rate)
 
     # Train the classifier head
     for epoch in range(num_epochs):
@@ -125,10 +125,14 @@ def train_classification_head(classifier, train_loader, eval_loader, num_epochs=
 
         print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {running_loss/len(train_loader):.4f}")
 
-    # Evaluate the classifier
+    print("Training completed.")
+    return classifier
+
+def evaluate_classification_head(classifier, eval_loader):
     classifier.eval()
     all_preds = []
     all_labels = []
+
     with torch.no_grad():
         for features, labels in eval_loader:
             features, labels = features.to(device), labels.to(device)
@@ -142,7 +146,10 @@ def train_classification_head(classifier, train_loader, eval_loader, num_epochs=
     precision = precision_score(all_labels, all_preds, average='weighted')
     recall = recall_score(all_labels, all_preds, average='weighted')
     f1 = f1_score(all_labels, all_preds, average='weighted')
+    
     print(f"Eval Accuracy: {accuracy:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1 Score: {f1:.4f}")
+    return accuracy, precision, recall, f1
+
 
 mlaad_root_dir = "Dataset\mlaad\MLAADv3\\fake"  # Update with your actual MLAAD dataset path
 combined_df = load_all_simpler_meta_files(mlaad_root_dir)
@@ -159,48 +166,36 @@ num_vocoder_classes = len(combined_df.vocoder.unique())
 # Define two separate classifiers for acoustic and vocoder tasks
 acoustic_classifier = ComponentClassifier(input_dim=120, num_classes=num_acoustic_classes).to(device)
 vocoder_classifier = ComponentClassifier(input_dim=120, num_classes=num_vocoder_classes).to(device)
-
+train_and_save_mio_model()
+mio_model = load_frozen_mio_model()
 # Separate DataLoaders for Acoustic and Vocoder Classification Tasks
 train_loader_acoustic = DataLoader(
-    MLAADDataset("path_to_mlaad/train_meta.csv", mlaad_root_dir, label_type="acoustic"),
+    MLAADDataset(train_df, mlaad_root_dir, mio_model, label_type="acoustic"),
     batch_size=16, shuffle=True
 )
 eval_loader_acoustic = DataLoader(
-    MLAADDataset("path_to_mlaad/eval_meta.csv", mlaad_root_dir, label_type="acoustic"),
+    MLAADDataset(eval_df, mlaad_root_dir, mio_model, label_type="acoustic"),
     batch_size=16, shuffle=False
 )
 
 train_loader_vocoder = DataLoader(
-    MLAADDataset("path_to_mlaad/train_meta.csv", mlaad_root_dir, label_type="vocoder"),
+    MLAADDataset(train_df, mlaad_root_dir, mio_model, label_type="vocoder"),
     batch_size=16, shuffle=True
 )
 eval_loader_vocoder = DataLoader(
-    MLAADDataset("path_to_mlaad/eval_meta.csv", mlaad_root_dir, label_type="vocoder"),
+    MLAADDataset(eval_df, mlaad_root_dir, mio_model, label_type="vocoder"),
     batch_size=16, shuffle=False
 )
 
 # Train and evaluate the acoustic classifier
 print("Training Acoustic Classifier:")
-train_classification_head(acoustic_classifier, train_loader_acoustic, eval_loader_acoustic)
+acoustic_classifier = train_classification_head(acoustic_classifier, train_loader_acoustic)
 
-# Train and evaluate the vocoder classifier
+print("Evaluating Acoustic Classifier:")
+evaluate_classification_head(acoustic_classifier, eval_loader_acoustic)
+
 print("Training Vocoder Classifier:")
-train_classification_head(vocoder_classifier, train_loader_vocoder, eval_loader_vocoder)
-# Load and run the two-stage process
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-num_epochs = 10
-train_root = "path_to_MLAAD/train_audio"  # Root for training audio files
-eval_root = "path_to_MLAAD/eval_audio"  # Root for eval audio files
+vocoder_classifier = train_classification_head(vocoder_classifier, train_loader_vocoder)
 
-# Train MiO on ASVspoof 2019
-train_and_save_mio_model()
-
-# Load frozen MiO as feature extractor
-mio_model = load_frozen_mio_model()
-
-# Prepare dataloaders for MLAAD train/eval
-train_loader = DataLoader(MLAADDataset("path_to_mlaad/train_meta.csv", train_root), batch_size=16, shuffle=True)
-eval_loader = DataLoader(MLAADDataset("path_to_mlaad/eval_meta.csv", eval_root), batch_size=16, shuffle=False)
-
-# Train classifier head on MLAAD
-train_classification_head(mio_model, train_loader, eval_loader)
+print("Evaluating Vocoder Classifier:")
+evaluate_classification_head(vocoder_classifier, eval_loader_vocoder)

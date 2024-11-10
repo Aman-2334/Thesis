@@ -1,46 +1,102 @@
+# Two-Stage Audio Deepfake Detection with MiO Model
 
-# Thesis
+This repository implements a two-stage audio deepfake detection process based on the paper *Source Tracing of Audio Deepfake Systems*. The approach leverages a pretrained countermeasure model (MiO) for feature extraction and performs separate classification tasks for acoustic models and vocoders. This repository processes audio data from the ASVspoof 2019 and MLAAD datasets to accomplish these tasks.
 
-Keeping track of my thesis
+## Repository Structure
 
-## Venv Setup
-pip install torch soundfile transformers pydub scikit-learn pandas
+- **`mlaad_dataset_preprocess.py`**: Script for preprocessing the MLAAD dataset. It generates simplified metadata files (`simpler_meta.csv`) for each model directory in MLAAD, which contain essential columns: file path, model name, and architecture.
+- **`thesis.py`**: Contains the MiO model training code for binary classification on the ASVspoof 2019 dataset.
+- **`two_stage_process.py`**: Main script for implementing the two-stage process:
+  - **Stage 1**: Trains the MiO model on ASVspoof 2019.
+  - **Stage 2**: Uses the trained MiO model as a frozen feature extractor on MLAAD data, then trains separate classifiers for acoustic model and vocoder classification.
+- **`whisper_feature_extractor.py`**: Contains functions for extracting CNN-based features from the Whisper model for the ASVspoof 2019 dataset.
+- **`xlsr_feature_extractor.py`**: Contains functions for extracting CNN-based features from the XLS-R model for the ASVspoof 2019 dataset.
 
-torchaudio wasnt able to handle flac files so using soundfile instead
+## Overview of the Two-Stage Process
 
-## Whisper Feature Extractor
-- Dataset Class (ASVspoofWhisperDataset): 
-  - Loads audio files and converts them to a fixed-length mel-spectrogram.
-  - Pads or truncates each mel-spectrogram to ensure compatibility with Whisper’s expected input size (target_length = 3000).
+### Stage 1: Training MiO Model on ASVspoof 2019 Dataset
+The MiO model is initially trained on the ASVspoof 2019 dataset to perform binary classification (bonafide vs. spoof). After training, the MiO model is saved and frozen for feature extraction in Stage 2.
 
-- Whisper Feature Extraction:
-  - For each batch, it extracts the last hidden state from the Whisper model, which serves as the feature representation.
-  - whisper_features contains the feature embeddings of shape [batch_size, seq_length, hidden_size], where hidden_size is specific to the Whisper model variant (e.g., 768 for whisper-base).
+### Stage 2: Component Classification on MLAAD Dataset
+Using the frozen MiO model, embeddings are generated for MLAAD dataset audio files. Two separate lightweight classification heads (fully connected neural networks) are then trained on these embeddings:
+- **Acoustic Classifier**: Classifies based on acoustic models.
+- **Vocoder Classifier**: Classifies based on vocoders.
 
-- Inspecting Features:
-  - Prints the shapes of the features and labels for verification.
-  - Processes only one batch for quick inspection.
+## Files and Functions
 
-- Notes
-  - Adjust Paths: Replace audio_dir and protocol_path with the correct paths for your dataset.
-  - Adjust Model Variants: If you’re using a different Whisper variant, check and adjust the hidden size in subsequent processing steps.
-This code should provide you with Whisper features from the ASVspoof2019 dataset, suitable for further processing or model training.
+### `mlaad_dataset_preprocess.py`
+This script traverses the MLAAD dataset directory structure and generates `simpler_meta.csv` files for each model directory. The CSV contains:
+- `file_path`: Path to each audio file.
+- `model`: Model name used.
+- `architecture`: Acoustic model architecture.
 
-## XLS-R Feature Extractor
-- XLS-R Model and Processor:
-  - We load Wav2Vec2Model and Wav2Vec2Processor with the facebook/wav2vec2-xls-r-1b model.
-- ASVspoof Dataset Class (ASVspoofXLSRDataset):
-  - Loads audio files, resamples them if necessary, and processes them using xlsr_processor.
-  - xlsr_processor converts waveforms to input values compatible with XLS-R, which it uses to generate embeddings.
-- Feature Extraction:
-  - xlsr_model(input_values) computes the last hidden state of XLS-R’s encoder, which is saved in xlsr_features.
-- Confirm Output Shape:
-  - The expected shape for xlsr_features should be [batch_size, seq_length, hidden_size], where hidden_size is specific to the XLS-R model (e.g., 1024 for wav2vec2-xls-r-1b).
-- Expected Output
-  - XLS-R Encoder Feature Shape: You should see a shape like [32, seq_length, 1024], where:
-    - 32 is the batch size.
-    - seq_length depends on the length of input audio, as XLS-R does not downsample as aggressively as Whisper.
-    - 1024 is the hidden size of XLS-R’s xls-r-1b variant.
-This code will provide you with the XLS-R features for each batch of audio from the ASVspoof2019 dataset.
+### `thesis.py`
+This script trains the MiO model for binary spoof detection using ASVspoof 2019 data. The trained MiO model is then saved and can be loaded later for feature extraction.
 
-Because the input audio tensors in the batch have different lengths, which makes it impossible to stack them directly. Since audio samples can vary in length, it’s common to apply padding so that all tensors in a batch have the same size. To handle this, we can use a custom collate_fn to pad each audio sample to the length of the longest sample in the batch.
+### `two_stage_process.py`
+This is the main script for the two-stage classification process:
+- **`train_and_save_mio_model()`**: Trains and saves the MiO model if it hasn’t been trained yet.
+- **`load_frozen_mio_model()`**: Loads the MiO model and freezes its layers to act as a feature extractor.
+- **`extract_features_with_mio()`**: Extracts features from MLAAD audio samples using the frozen MiO model.
+- **`MLAADDataset`**: Custom dataset class for loading MLAAD metadata, retrieving audio samples, and extracting embeddings.
+- **`train_classification_head()`**: Function for training a lightweight classifier head on extracted features.
+- **`evaluate_classification_head()`**: Evaluates classifier performance using accuracy, precision, recall, and F1 score.
+
+### `whisper_feature_extractor.py` and `xlsr_feature_extractor.py`
+These files extract CNN-based feature embeddings for audio samples using Whisper and XLS-R models, respectively. These embeddings are then used as input features in the MiO model.
+
+## Usage
+
+### 1. Prerequisites
+Ensure you have the required dependencies:
+- `torch`
+- `torchaudio`
+- `transformers`
+- `pandas`
+- `scikit-learn`
+
+### 2. Data Preparation
+Place ASVspoof 2019 and MLAAD datasets in directories accessible to the scripts. For MLAAD, ensure `meta.csv` files are correctly formatted in each model directory.
+
+### 3. Running Stage 1: Train MiO Model on ASVspoof 2019
+Run `train_and_save_mio_model()` in `two_stage_process.py` to train the MiO model on ASVspoof data for binary classification. The trained model will be saved for later use.
+
+### 4. Running Stage 2: Feature Extraction and Classification with MLAAD
+Load the MLAAD dataset and extract MiO embeddings with `extract_features_with_mio()` in the `MLAADDataset` class. Train and evaluate acoustic and vocoder classifiers using `train_classification_head()` and `evaluate_classification_head()`.
+
+### Example Commands
+
+```python
+# Stage 1: Train MiO on ASVspoof 2019
+train_and_save_mio_model()
+
+# Load Frozen MiO Model for Feature Extraction
+mio_model = load_frozen_mio_model()
+
+# Prepare Dataloaders for Acoustic and Vocoder Classification
+train_loader_acoustic = DataLoader(
+    MLAADDataset(train_df, mlaad_root_dir, mio_model, label_type="acoustic"),
+    batch_size=16, shuffle=True
+)
+eval_loader_acoustic = DataLoader(
+    MLAADDataset(eval_df, mlaad_root_dir, mio_model, label_type="acoustic"),
+    batch_size=16, shuffle=False
+)
+
+# Train and Evaluate Acoustic Classifier
+train_classification_head(acoustic_classifier, train_loader_acoustic, eval_loader_acoustic)
+
+# Repeat for Vocoder Classification
+train_loader_vocoder = DataLoader(
+    MLAADDataset(train_df, mlaad_root_dir, mio_model, label_type="vocoder"),
+    batch_size=16, shuffle=True
+)
+eval_loader_vocoder = DataLoader(
+    MLAADDataset(eval_df, mlaad_root_dir, mio_model, label_type="vocoder"),
+    batch_size=16, shuffle=False
+)
+train_classification_head(vocoder_classifier, train_loader_vocoder, eval_loader_vocoder)
+```
+### RESULTS
+
+Will be updated later

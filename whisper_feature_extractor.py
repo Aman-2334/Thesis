@@ -100,28 +100,27 @@ def whisper_batch_generator(dataloader):
     print("Starting whisper feature extraction...")
     cnn_extractor = CNNFeatureExtractor(input_dim=512, output_dim=120).to(device)
 
-    with torch.no_grad():  # Avoid computing gradients
-        for batch_idx, (mel_features, labels) in enumerate(dataloader):
-            print(f"Processing whisper batch {batch_idx + 1}/{len(dataloader)}")
+    for batch_idx, (mel_features, labels) in enumerate(dataloader):
+        print(f"Processing whisper batch {batch_idx + 1}/{len(dataloader)}")
 
-            # Move data to GPU
-            mel_features = mel_features.to(device)
-            labels = labels.to(device)
+        # Move data to GPU
+        mel_features = mel_features.to(device)
+        labels = labels.to(device)
 
-            # Extract features from Whisper model
-            whisper_encoder_outputs = whisper_model.encoder(mel_features)
-            whisper_features = whisper_encoder_outputs.last_hidden_state
+        # Extract features from Whisper model
+        whisper_encoder_outputs = whisper_model.encoder(mel_features)
+        whisper_features = whisper_encoder_outputs.last_hidden_state
 
-            # Apply CNN extraction
-            cnn_features = cnn_extractor(whisper_features)
+        # Apply CNN extraction
+        cnn_features = cnn_extractor(whisper_features)
 
-            # Move everything to CPU as soon as they are done
-            cnn_features = cnn_features.cpu()
-            labels = labels.cpu()
-            del mel_features, whisper_features, whisper_encoder_outputs
-            torch.cuda.empty_cache()
+        # Move everything to CPU as soon as they are done
+        cnn_features = cnn_features.cpu()
+        labels = labels.cpu()
+        del mel_features, whisper_features, whisper_encoder_outputs
+        torch.cuda.empty_cache()
 
-            yield cnn_features, labels
+        yield cnn_features, labels
 
     # Move model to CPU before deletion
     cnn_extractor.to('cpu')

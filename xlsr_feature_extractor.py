@@ -86,28 +86,27 @@ def xlsr_batch_generator(dataloader):
     print("Starting XLS-R feature extraction...")
     cnn_extractor = CNNFeatureExtractor(input_dim=1280, output_dim=120).to(device)
 
-    with torch.no_grad():
-        for batch_idx, (input_values, labels) in enumerate(dataloader):
-            print(f"Processing xlsr batch {batch_idx + 1}/{len(dataloader)}")
+    for batch_idx, (input_values, labels) in enumerate(dataloader):
+        print(f"Processing xlsr batch {batch_idx + 1}/{len(dataloader)}")
 
-            # Move data to GPU
-            input_values = input_values.to(device)
-            labels = labels.to(device)
+        # Move data to GPU
+        input_values = input_values.to(device)
+        labels = labels.to(device)
 
-            # Extract features from XLS-R model
-            xlsr_outputs = xlsr_model(input_values)
-            xlsr_features = xlsr_outputs.last_hidden_state
+        # Extract features from XLS-R model
+        xlsr_outputs = xlsr_model(input_values)
+        xlsr_features = xlsr_outputs.last_hidden_state
 
-            # Apply CNN extraction
-            cnn_features = cnn_extractor(xlsr_features)
+        # Apply CNN extraction
+        cnn_features = cnn_extractor(xlsr_features)
 
-            # Move features and labels back to CPU and clear GPU memory
-            cnn_features = cnn_features.cpu()
-            labels = labels.cpu()
-            del input_values, xlsr_features, xlsr_outputs
-            torch.cuda.empty_cache()
+        # Move features and labels back to CPU and clear GPU memory
+        cnn_features = cnn_features.cpu()
+        labels = labels.cpu()
+        del input_values, xlsr_features, xlsr_outputs
+        torch.cuda.empty_cache()
 
-            yield cnn_features, labels
+        yield cnn_features, labels
 
     # Move model to CPU before deletion
     cnn_extractor.to('cpu')

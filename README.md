@@ -76,11 +76,11 @@ mio_model = load_frozen_mio_model()
 # Prepare Dataloaders for Acoustic and Vocoder Classification
 train_loader_acoustic = DataLoader(
     MLAADDataset(train_df, mlaad_root_dir, mio_model, label_type="acoustic"),
-    batch_size=16, shuffle=True
+    batch_size=32, shuffle=True
 )
 eval_loader_acoustic = DataLoader(
     MLAADDataset(eval_df, mlaad_root_dir, mio_model, label_type="acoustic"),
-    batch_size=16, shuffle=False
+    batch_size=32, shuffle=False
 )
 
 # Train and Evaluate Acoustic Classifier
@@ -89,11 +89,11 @@ train_classification_head(acoustic_classifier, train_loader_acoustic, eval_loade
 # Repeat for Vocoder Classification
 train_loader_vocoder = DataLoader(
     MLAADDataset(train_df, mlaad_root_dir, mio_model, label_type="vocoder"),
-    batch_size=16, shuffle=True
+    batch_size=32, shuffle=True
 )
 eval_loader_vocoder = DataLoader(
     MLAADDataset(eval_df, mlaad_root_dir, mio_model, label_type="vocoder"),
-    batch_size=16, shuffle=False
+    batch_size=32, shuffle=False
 )
 train_classification_head(vocoder_classifier, train_loader_vocoder, eval_loader_vocoder)
 ```

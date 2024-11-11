@@ -56,7 +56,7 @@ train_audio_dir = 'dataset\\ASVspoof2019\\LA\\ASVspoof2019_LA_train\\flac'
 # CSV or TXT with file paths and labels
 train_metadata_path = 'dataset\\ASVspoof2019\\LA\\ASVspoof2019_LA_cm_protocols\\ASVspoof2019.LA.cm.train.trn.txt'
 model_save_path = "mio_model.pth"
-
+features_save_path = 'extracted_features.pth'
 # Initialize the MiO model
 cnn_output_dim = 120  # Output dimension from the CNN feature extractor
 output_dim = 2  # Number of classes for classification
@@ -91,18 +91,35 @@ def extract_features(dataloader_whisper, dataloader_xlsr):
         torch.cuda.empty_cache()
 
     print("Feature extraction completed.")
+    torch.save({
+        'whisper_features_list': whisper_features_list,
+        'xlsr_features_list': xlsr_features_list,
+        'labels_list': labels_list
+    }, features_save_path)
+
+    print(f"Features saved to {features_save_path}")
     return whisper_features_list, xlsr_features_list, labels_list
 
 def train_model():
     # Batch size and data loaders
-    batch_size = 16
-    dataset_whisper = ASVspoofWhisperDataset(train_audio_dir, train_metadata_path)
-    dataloader_whisper = DataLoader(dataset_whisper, batch_size=batch_size, shuffle=False)
-    dataset_xlsr = ASVspoofXLSRDataset(train_audio_dir, train_metadata_path)
-    dataloader_xlsr = DataLoader(dataset_xlsr, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
+    features_save_path = 'extracted_features.pth'
 
-    # Extract and store features once
-    whisper_features_list, xlsr_features_list, labels_list = extract_features(dataloader_whisper, dataloader_xlsr)
+    # Check if features have been saved
+    if os.path.exists(features_save_path):
+        print(f"Loading features from {features_save_path}")
+        saved_data = torch.load(features_save_path)
+        whisper_features_list = saved_data['whisper_features_list']
+        xlsr_features_list = saved_data['xlsr_features_list']
+        labels_list = saved_data['labels_list']
+    else:
+        batch_size=32
+        dataset_whisper = ASVspoofWhisperDataset(train_audio_dir, train_metadata_path)
+        dataloader_whisper = DataLoader(dataset_whisper, batch_size=batch_size, shuffle=False)
+        dataset_xlsr = ASVspoofXLSRDataset(train_audio_dir, train_metadata_path)
+        dataloader_xlsr = DataLoader(dataset_xlsr, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
+    
+        # Extract and store features once
+        whisper_features_list, xlsr_features_list, labels_list = extract_features(dataloader_whisper, dataloader_xlsr)
 
     for epoch in range(num_epochs):
         running_loss = 0.0
@@ -111,8 +128,8 @@ def train_model():
         for batch_idx, (cnn_features_whisper, cnn_features_xlsr, labels) in enumerate(
             zip(whisper_features_list, xlsr_features_list, labels_list)
         ):
-            cnn_features_whisper = cnn_features_whisper.to(device)
-            cnn_features_xlsr = cnn_features_xlsr.to(device)
+            cnn_features_whisper = cnn_features_whisper.to(device).requires_grad_(True)  # Enable gradients
+            cnn_features_xlsr = cnn_features_xlsr.to(device).requires_grad_(True)  # Enable gradients
             labels = labels.to(device)
 
             optimizer.zero_grad()
@@ -124,7 +141,7 @@ def train_model():
             loss = criterion(outputs, labels)
 
             # Backward pass and optimization
-            loss.backward(retain_graph=True)
+            loss.backward()
             optimizer.step()
 
             running_loss += loss.item()
@@ -153,7 +170,7 @@ test_audio_dir = 'dataset\\ASVspoof2019\\LA\\ASVspoof2019_LA_eval\\flac'
 test_metadata_path = 'dataset\\ASVspoof2019\\LA\\ASVspoof2019_LA_cm_protocols\\ASVspoof2019.LA.cm.eval.trl.txt'
 
 def evaluate_model():
-    batch_size = 16
+    batch_size=32
     dataset_whisper = ASVspoofWhisperDataset(test_audio_dir, test_metadata_path)
     dataloader_whisper = DataLoader(dataset_whisper, batch_size=batch_size, shuffle=False)
     dataset_xlsr = ASVspoofXLSRDataset(test_audio_dir, test_metadata_path)

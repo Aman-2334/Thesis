@@ -89,7 +89,9 @@ def xlsr_batch_generator(dataloader, cache_dir='cache_xlsr_batches'):
 
     for batch_idx, (input_values, labels) in enumerate(dataloader):
         print(f"Processing and caching XLS-R batch {batch_idx + 1}/{len(dataloader)}")
-
+        # batch_path = os.path.join(cache_dir,f'batch_{batch_idx}.pt')
+        # if(os.path.exists(batch_path)):
+        #     continue
         # Move data to GPU
         input_values = input_values.to(device)
         labels = labels.to(device)
@@ -110,5 +112,4 @@ def xlsr_batch_generator(dataloader, cache_dir='cache_xlsr_batches'):
         # Clear GPU memory after each batch
         del input_values, xlsr_features, xlsr_outputs, cnn_features, labels
         torch.cuda.empty_cache()
-
     print("XLS-R feature extraction and caching to disk completed.")

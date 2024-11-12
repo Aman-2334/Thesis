@@ -78,12 +78,12 @@ def extract_features(dataloader_whisper, dataloader_xlsr, whisper_cache_dir, xls
     labels_list = []
 
     # Ensure the cached directories exist
-    if not os.path.exists(whisper_cache_dir):
-        print(f"Whisper cache directory '{whisper_cache_dir}' does not exist.")
-        whisper_batch_generator(dataloader_whisper,whisper_cache_dir)
     if not os.path.exists(xlsr_cache_dir):
         print(f"XLS-R cache directory '{xlsr_cache_dir}' does not exist.")
         xlsr_batch_generator(dataloader_xlsr,xlsr_cache_dir)
+    if not os.path.exists(whisper_cache_dir):
+        print(f"Whisper cache directory '{whisper_cache_dir}' does not exist.")
+        whisper_batch_generator(dataloader_whisper,whisper_cache_dir)
 
     # Get sorted list of batch files in each cache directory
     whisper_batch_files = sorted(os.listdir(whisper_cache_dir))
@@ -116,7 +116,7 @@ def extract_features(dataloader_whisper, dataloader_xlsr, whisper_cache_dir, xls
 
 def train_model():
     # Batch size and data loaders
-    batch_size=32
+    batch_size = 16
     dataset_whisper = ASVspoofWhisperDataset(train_audio_dir, train_metadata_path)
     dataloader_whisper = DataLoader(dataset_whisper, batch_size=batch_size, shuffle=False)
     dataset_xlsr = ASVspoofXLSRDataset(train_audio_dir, train_metadata_path)

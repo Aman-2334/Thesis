@@ -68,41 +68,63 @@ optimizer = optim.Adam(mio_model.parameters(), lr=0.001)
 
 num_epochs = 10  # Adjust based on your requirements
 
-def extract_features(dataloader_whisper, dataloader_xlsr):
-    # Initialize lists to store features and labels (on CPU to avoid GPU memory buildup)
+import torch
+import os
+
+def extract_features(dataloader_whisper, dataloader_xlsr, whisper_cache_dir, xlsr_cache_dir):
+    # Initialize lists to store features and labels on CPU
     whisper_features_list = []
     xlsr_features_list = []
     labels_list = []
 
-    # Extract features from Whisper and XLS-R once
-    for (cnn_features_whisper, labels_whisper), (cnn_features_xlsr, labels_xlsr) in zip(
-        whisper_batch_generator(dataloader_whisper), xlsr_batch_generator(dataloader_xlsr)
-    ):
+    # Ensure the cached directories exist
+    if not os.path.exists(xlsr_cache_dir):
+        print(f"XLS-R cache directory '{xlsr_cache_dir}' does not exist.")
+        xlsr_batch_generator(dataloader_xlsr,xlsr_cache_dir)
+    if not os.path.exists(whisper_cache_dir):
+        print(f"Whisper cache directory '{whisper_cache_dir}' does not exist.")
+        whisper_batch_generator(dataloader_whisper,whisper_cache_dir)
+
+    # Get sorted list of batch files in each cache directory
+    whisper_batch_files = sorted(os.listdir(whisper_cache_dir))
+    xlsr_batch_files = sorted(os.listdir(xlsr_cache_dir))
+
+    # Ensure the number of batches matches between the two caches
+    assert len(whisper_batch_files) == len(xlsr_batch_files), "Mismatch in the number of Whisper and XLS-R cached batches."
+
+    # Load each batch from the cached directories
+    for whisper_file, xlsr_file in zip(whisper_batch_files, xlsr_batch_files):
+        # Load the cached Whisper and XLS-R batches
+        whisper_batch_path = os.path.join(whisper_cache_dir, whisper_file)
+        xlsr_batch_path = os.path.join(xlsr_cache_dir, xlsr_file)
+
+        whisper_data = torch.load(whisper_batch_path)
+        xlsr_data = torch.load(xlsr_batch_path)
+
         # Ensure labels match
-        assert torch.equal(labels_whisper, labels_xlsr), "Mismatch in labels between Whisper and XLS-R batches"
-        
-        # Move features and labels to CPU before appending
-        whisper_features_list.append(cnn_features_whisper.cpu())
-        xlsr_features_list.append(cnn_features_xlsr.cpu())
-        labels_list.append(labels_whisper.cpu())
+        assert torch.equal(whisper_data['labels'], xlsr_data['labels']), "Mismatch in labels between Whisper and XLS-R batches"
 
-        # Explicitly delete GPU tensors and clear cache
-        del cnn_features_whisper, labels_whisper, cnn_features_xlsr, labels_xlsr
-        torch.cuda.empty_cache()
+        # Enable gradient tracking
+        whisper_features = whisper_data['features'].requires_grad_(True)
+        xlsr_features = xlsr_data['features'].requires_grad_(True)
 
-    print("Feature extraction completed.")
+        whisper_features_list.append(whisper_features)
+        xlsr_features_list.append(xlsr_features)
+        labels_list.append(whisper_data['labels'])
+
     return whisper_features_list, xlsr_features_list, labels_list
 
 def train_model():
     # Batch size and data loaders
-    batch_size=32
+    batch_size = 16
     dataset_whisper = ASVspoofWhisperDataset(train_audio_dir, train_metadata_path)
     dataloader_whisper = DataLoader(dataset_whisper, batch_size=batch_size, shuffle=False)
     dataset_xlsr = ASVspoofXLSRDataset(train_audio_dir, train_metadata_path)
     dataloader_xlsr = DataLoader(dataset_xlsr, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
-
+    whisper_cache_dir='train_cache_whisper_batches'
+    xlsr_cache_dir='train_cache_xlsr_batches'
     # Extract and store features once
-    whisper_features_list, xlsr_features_list, labels_list = extract_features(dataloader_whisper, dataloader_xlsr)
+    whisper_features_list, xlsr_features_list, labels_list = extract_features(dataloader_whisper, dataloader_xlsr, whisper_cache_dir, xlsr_cache_dir)
 
     for epoch in range(num_epochs):
         running_loss = 0.0
@@ -138,6 +160,7 @@ def train_model():
     torch.save(mio_model.state_dict(), model_save_path)
     print(f"Model saved to {model_save_path}")
 
+
 if os.path.exists(model_save_path):
     # Load the model if it exists
     mio_model.load_state_dict(torch.load(model_save_path))
@@ -153,14 +176,15 @@ test_audio_dir = 'dataset\\ASVspoof2019\\LA\\ASVspoof2019_LA_eval\\flac'
 test_metadata_path = 'dataset\\ASVspoof2019\\LA\\ASVspoof2019_LA_cm_protocols\\ASVspoof2019.LA.cm.eval.trl.txt'
 
 def evaluate_model():
-    batch_size=32
+    batch_size = 16
     dataset_whisper = ASVspoofWhisperDataset(test_audio_dir, test_metadata_path)
     dataloader_whisper = DataLoader(dataset_whisper, batch_size=batch_size, shuffle=False)
     dataset_xlsr = ASVspoofXLSRDataset(test_audio_dir, test_metadata_path)
     dataloader_xlsr = DataLoader(dataset_xlsr, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
-
-    # Step 1: Extract features once for evaluation
-    whisper_features_list, xlsr_features_list, labels_list = extract_features(dataloader_whisper, dataloader_xlsr)
+    whisper_cache_dir='eval_cache_whisper_batches'
+    xlsr_cache_dir='eval_cache_xlsr_batches'
+    # Extract and store features once
+    whisper_features_list, xlsr_features_list, labels_list = extract_features(dataloader_whisper, dataloader_xlsr, whisper_cache_dir, xlsr_cache_dir)
 
     mio_model.eval()  # Set the model to evaluation mode
     all_preds = []
@@ -196,5 +220,5 @@ def evaluate_model():
 
     return accuracy, precision, recall, f1
 
-evaluate_model()
+# evaluate_model()
 # print("torch cuda",torch.cuda.is_available())

@@ -29,9 +29,11 @@ class MiOModel(nn.Module):
         # Softmax for classification
         self.softmax = nn.Softmax(dim=1)
         
-    def forward(self, cnn_features_whisper, cnn_features_xlsr):
+    def forward(self, cnn_features_whisper, cnn_features_xlsr, return_embedding=False):
         # Perform bilinear pooling on the CNN outputs from Whisper and XLS-R
         bilinear_output = self.bilinear_pooling(cnn_features_whisper, cnn_features_xlsr)
+        if return_embedding:
+            return bilinear_output
         
         # Pass through fully connected layers
         fc_output = self.fc(bilinear_output)

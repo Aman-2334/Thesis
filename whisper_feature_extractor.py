@@ -96,34 +96,33 @@ class CNNFeatureExtractor(nn.Module):
         return x
     
 # Extract features and inspect
-def whisper_batch_generator(dataloader):
-    print("Starting whisper feature extraction...")
+def whisper_batch_generator(dataloader, cache_dir='cache_whisper_batches'):
+    print("Starting whisper feature extraction and caching to disk...")
+    os.makedirs(cache_dir, exist_ok=True)  # Create a directory for cached batches if it doesn't exist
     cnn_extractor = CNNFeatureExtractor(input_dim=512, output_dim=120).to(device)
 
     for batch_idx, (mel_features, labels) in enumerate(dataloader):
-        print(f"Processing whisper batch {batch_idx + 1}/{len(dataloader)}")
+        print(f"Processing and caching whisper batch {batch_idx + 1}/{len(dataloader)}")
 
         # Move data to GPU
         mel_features = mel_features.to(device)
         labels = labels.to(device)
 
-        # Extract features from Whisper model
+        # Forward pass through Whisper encoder and CNN extractor
         whisper_encoder_outputs = whisper_model.encoder(mel_features)
         whisper_features = whisper_encoder_outputs.last_hidden_state
-
-        # Apply CNN extraction
         cnn_features = cnn_extractor(whisper_features)
 
-        # Move everything to CPU as soon as they are done
+        # Move features and labels to CPU before saving
         cnn_features = cnn_features.cpu()
         labels = labels.cpu()
-        del mel_features, whisper_features, whisper_encoder_outputs
+
+        # Save the features and labels to disk
+        batch_cache_path = os.path.join(cache_dir, f'batch_{batch_idx}.pt')
+        torch.save({'features': cnn_features, 'labels': labels}, batch_cache_path)
+
+        # Clear GPU memory after each batch
+        del mel_features, whisper_features, cnn_features, labels
         torch.cuda.empty_cache()
 
-        yield cnn_features, labels
-
-    # Move model to CPU before deletion
-    cnn_extractor.to('cpu')
-    del cnn_extractor
-    torch.cuda.empty_cache()
-    print("Whisper feature extraction with 1D CNN completed.")
+    print("Whisper feature extraction and caching to disk completed.")

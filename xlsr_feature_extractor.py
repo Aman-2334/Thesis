@@ -82,34 +82,33 @@ class CNNFeatureExtractor(nn.Module):
         return x
 
 # Extract features and inspect
-def xlsr_batch_generator(dataloader):
-    print("Starting XLS-R feature extraction...")
+def xlsr_batch_generator(dataloader, cache_dir='cache_xlsr_batches'):
+    print("Starting XLS-R feature extraction and caching to disk...")
+    os.makedirs(cache_dir, exist_ok=True)  # Create cache directory if it doesn't exist
     cnn_extractor = CNNFeatureExtractor(input_dim=1280, output_dim=120).to(device)
 
     for batch_idx, (input_values, labels) in enumerate(dataloader):
-        print(f"Processing xlsr batch {batch_idx + 1}/{len(dataloader)}")
+        print(f"Processing and caching XLS-R batch {batch_idx + 1}/{len(dataloader)}")
 
         # Move data to GPU
         input_values = input_values.to(device)
         labels = labels.to(device)
 
-        # Extract features from XLS-R model
+        # Forward pass through XLS-R and CNN extractor
         xlsr_outputs = xlsr_model(input_values)
         xlsr_features = xlsr_outputs.last_hidden_state
-
-        # Apply CNN extraction
         cnn_features = cnn_extractor(xlsr_features)
 
-        # Move features and labels back to CPU and clear GPU memory
+        # Move features and labels to CPU before saving
         cnn_features = cnn_features.cpu()
         labels = labels.cpu()
-        del input_values, xlsr_features, xlsr_outputs
+
+        # Save features and labels to disk
+        batch_cache_path = os.path.join(cache_dir, f'batch_{batch_idx}.pt')
+        torch.save({'features': cnn_features, 'labels': labels}, batch_cache_path)
+
+        # Clear GPU memory after each batch
+        del input_values, xlsr_features, xlsr_outputs, cnn_features, labels
         torch.cuda.empty_cache()
 
-        yield cnn_features, labels
-
-    # Move model to CPU before deletion
-    cnn_extractor.to('cpu')
-    del cnn_extractor
-    torch.cuda.empty_cache()
-    print("XLS-R feature extraction with 1D CNN completed.")
+    print("XLS-R feature extraction and caching to disk completed.")

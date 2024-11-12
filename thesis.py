@@ -220,5 +220,5 @@ def evaluate_model():
 
     return accuracy, precision, recall, f1
 
-evaluate_model()
+# evaluate_model()
 # print("torch cuda",torch.cuda.is_available())

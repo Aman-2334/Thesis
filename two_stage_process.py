@@ -1,294 +1,229 @@
 import os
 import torch
-import torch.nn as nn
-import torchaudio
-import torch.optim as optim
 import pandas as pd
 import soundfile as sf
 from torch.utils.data import Dataset, DataLoader
+import torch.nn as nn
+import torchaudio
+from whisper_feature_extractor import CNNFeatureExtractor as WhisperCNN
+from xlsr_feature_extractor import CNNFeatureExtractor as XLSRCNN
+from transformers import WhisperProcessor, WhisperModel, Wav2Vec2FeatureExtractor, Wav2Vec2Model
+import torch.optim as optim
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-from thesis import MiOModel, train_model
-from whisper_feature_extractor import CNNFeatureExtractor, whisper_processor, whisper_model
-from xlsr_feature_extractor import CNNFeatureExtractor, xlsr_model
+from thesis import MiOModel  # Replace with actual import of MiO model
 
-model_save_path = "mio_model.pth"
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Using device: {device}")
 
-def load_all_simpler_meta_files(root_dir):
-    all_data = []
-    for language_dir in os.listdir(root_dir):
-        language_path = os.path.join(root_dir, language_dir)
-        if os.path.isdir(language_path):
-            for model_dir in os.listdir(language_path):
-                model_path = os.path.join(language_path, model_dir)
-                simpler_meta_path = os.path.join(model_path, 'simpler_meta.csv')
-                if os.path.isfile(simpler_meta_path):
-                    try:
-                        # Load the simpler_meta.csv and append to the list
-                        df = pd.read_csv(simpler_meta_path)
-                        all_data.append(df)
-                    except pd.errors.EmptyDataError:
-                        print(f"Skipping empty file: {simpler_meta_path}")
-    # Concatenate all loaded data into a single DataFrame
-    combined_df = pd.concat(all_data, ignore_index=True)
-    print(f"Total records loaded: {len(combined_df)}")
-    return combined_df
-
-class ComponentClassifier(nn.Module):
-    def __init__(self, input_dim, hidden_dim=64, num_classes=10):  # Adjust num_classes as needed
-        super(ComponentClassifier, self).__init__()
-        self.fc = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, num_classes)
-        )
-
-    def forward(self, x):
-        return self.fc(x)
-
-# Step 1: Train and Save MiO Model on ASVspoof 2019
-def train_and_save_mio_model():
-    if not os.path.exists(model_save_path):
-        train_model()
-        print("MiO model trained and saved.")
-
-# Step 2: Load Frozen MiO Model for Feature Extraction
-def load_frozen_mio_model():
+# Load and freeze the MiO model
+def load_frozen_mio_model(model_path):
     mio_model = MiOModel().to(device)
-    mio_model.load_state_dict(torch.load(model_save_path))
+    mio_model.load_state_dict(torch.load(model_path))
+    mio_model.eval()  # Set to eval mode
     for param in mio_model.parameters():
         param.requires_grad = False  # Freeze all parameters
     return mio_model
 
-def preprocess_audio_with_whisper_xlsr(audio_path):
-    # Load audio
-    waveform, sample_rate = sf.read(audio_path)
-    waveform = torch.tensor(waveform, dtype=torch.float32).unsqueeze(0).to(device)
+# Load Whisper model and processor
+whisper_model = WhisperModel.from_pretrained('openai/whisper-base').to(device)
+whisper_processor = WhisperProcessor.from_pretrained('openai/whisper-base')
 
-    # Resample if necessary
+# Load XLS-R model and processor
+xlsr_model = Wav2Vec2Model.from_pretrained('facebook/wav2vec2-xls-r-1b').to(device)
+xlsr_processor = Wav2Vec2FeatureExtractor.from_pretrained('facebook/wav2vec2-xls-r-1b')
+
+# Function to extract CNN features for a single MLAAD audio file
+def preprocess_audio_with_whisper_xlsr(audio_path):
+    # Load audio waveform
+    waveform, sample_rate = torchaudio.load(audio_path)
+    waveform = waveform.to(device)
+
+    # Resample if needed
     if sample_rate != 16000:
         resampler = torchaudio.transforms.Resample(orig_freq=sample_rate, new_freq=16000).to(device)
         waveform = resampler(waveform)
 
-    waveform_cpu = waveform.cpu().numpy()
-    # Extract Whisper CNN features
-    with torch.no_grad():
-        mel_features = whisper_processor.feature_extractor(
-            waveform_cpu,
-            sampling_rate=16000,
-            return_tensors="pt"
-        ).input_features.squeeze(0)  # Remove batch dimension for single sample
-
-        # Pad or truncate mel-spectrogram to TARGET_MEL_LENGTH
-        if mel_features.shape[1] < 3000:
-            padding = 3000 - mel_features.shape[1]
-            mel_features = torch.nn.functional.pad(mel_features, (0, padding), mode='constant', value=0)
-        else:
-            mel_features = mel_features[:, :3000]
-
-        # Now pass through Whisper
-        mel_features = mel_features.to(device)
-        whisper_encoder_outputs = whisper_model.encoder(mel_features.unsqueeze(0))
-        cnn_extractor = CNNFeatureExtractor(input_dim=512, output_dim=120).to(device)
-        cnn_features_whisper = cnn_extractor(whisper_encoder_outputs.last_hidden_state)
-
-    # Extract XLS-R CNN features
-    with torch.no_grad():
-        xlsr_features = xlsr_model(waveform)
-        cnn_extractor = CNNFeatureExtractor(input_dim=1280, output_dim=120).to(device)
-        cnn_features_xlsr = cnn_extractor(xlsr_features.last_hidden_state)
+    # Whisper feature extraction
+    mel_features = whisper_processor.feature_extractor(
+        waveform.cpu().squeeze(0).numpy(),
+        sampling_rate=16000,
+        return_tensors="pt"
+    ).input_features.to(device)
     
+    with torch.no_grad():
+        whisper_encoder_outputs = whisper_model.encoder(mel_features)
+        whisper_features = whisper_encoder_outputs.last_hidden_state
+
+    # Whisper CNN extraction
+    whisper_cnn_extractor = WhisperCNN(input_dim=whisper_features.shape[2], output_dim=120).to(device)
+    cnn_features_whisper = whisper_cnn_extractor(whisper_features)
+
+    # XLS-R feature extraction
+    xlsr_inputs = xlsr_processor(waveform.cpu().squeeze(0).numpy(), sampling_rate=16000, return_tensors="pt", padding=True)
+    xlsr_input_values = xlsr_inputs.input_values.to(device)
+
+    with torch.no_grad():
+        xlsr_outputs = xlsr_model(xlsr_input_values)
+        xlsr_features = xlsr_outputs.last_hidden_state
+
+    # XLS-R CNN extraction
+    xlsr_cnn_extractor = XLSRCNN(input_dim=xlsr_features.shape[2], output_dim=120).to(device)
+    cnn_features_xlsr = xlsr_cnn_extractor(xlsr_features)
+
     return cnn_features_whisper, cnn_features_xlsr
 
-def extract_features_with_mio(audio_path, mio_model):
-    # Get the CNN features from Whisper and XLS-R
+# Feature extraction function using the frozen MiO model
+def extract_mio_features(audio_path, mio_model):
     cnn_features_whisper, cnn_features_xlsr = preprocess_audio_with_whisper_xlsr(audio_path)
-
-    # Pass through the frozen MiO model to get the feature embedding
+    
+    # Check that the shapes are correct before passing to the MiO model
+    assert cnn_features_whisper.shape[1] == 120, f"Unexpected whisper feature shape: {cnn_features_whisper.shape}"
+    assert cnn_features_xlsr.shape[1] == 120, f"Unexpected XLS-R feature shape: {cnn_features_xlsr.shape}"
+    
+    # Extract MiO features
     with torch.no_grad():
         feature_tensor = mio_model(cnn_features_whisper, cnn_features_xlsr, return_embedding=True)
+    
+    # Check the final output shape to ensure consistency
+    assert feature_tensor.shape[1] == 120, f"Unexpected feature tensor shape: {feature_tensor.shape}"
+    return feature_tensor.cpu()
 
-    # Move feature tensor to CPU if needed
-    feature_tensor = feature_tensor.cpu().detach()
-    # print("feature_tensor",feature_tensor.shape)
-    return feature_tensor
+# Load all simpler_meta.csv files into a single DataFrame
+def load_combined_meta(root_dir):
+    combined_meta = pd.DataFrame()
+    for subdir, _, files in os.walk(root_dir):
+        for file in files:
+            if file == "simpler_meta.csv":
+                meta_path = os.path.join(subdir, file)
+                meta_df = pd.read_csv(meta_path)
+                combined_meta = pd.concat([combined_meta, meta_df], ignore_index=True)
+    return combined_meta
 
-
+# Dataset class for MLAAD, caching features if not already cached
 class MLAADDataset(Dataset):
-    def __init__(self, meta_df, root_dir, mio_model, label_type="acoustic"):
-        self.data = pd.DataFrame(meta_df)
+    def __init__(self, meta_df, root_dir, mio_model, label_type="acoustic", cache_dir="mlaad_cached_features"):
+        self.data = meta_df
         self.root_dir = root_dir
-        self.mio_model = mio_model  # Pass the frozen MiO model to the dataset
-        self.label_type = label_type  # "acoustic" or "vocoder"
-        self.label_mapping = acoustic_label_mapping if label_type == "acoustic" else vocoder_label_mapping
+        self.mio_model = mio_model
+        self.label_type = label_type
+        self.cache_dir = cache_dir
+        os.makedirs(cache_dir, exist_ok=True)
+
+        # Create a mapping from label strings to integers
+        self.label_mapping = {label: idx for idx, label in enumerate(self.data[self.label_type].unique())}
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
         row = self.data.iloc[idx]
-        file_path = os.path.join(self.root_dir, row['file_path'])
-        file_path = file_path.replace("./fake/","").replace("/","\\");
-        label_str = row[self.label_type]  # Either 'acoustic' or 'vocoder'
+        audio_path = os.path.join(self.root_dir, row['file_path']).replace("./fake/", "")
         
-        # Map string label to integer
-        label = self.label_mapping[label_str]
-
-        # Extract feature embeddings using the frozen MiO model
-        feature_tensor = extract_features_with_mio(file_path, self.mio_model)
+        # Map the label string to an integer
+        label = self.label_mapping[row[self.label_type]]
+        
+        # Cache file path
+        cache_file = os.path.join(self.cache_dir, f"{row['file_path'].replace('/', '_')}.pt")
+        
+        if os.path.exists(cache_file):
+            feature_tensor = torch.load(cache_file)
+        else:
+            feature_tensor = extract_mio_features(audio_path, self.mio_model)
+            torch.save(feature_tensor, cache_file)
         
         return feature_tensor, torch.tensor(label, dtype=torch.long)
 
-# Stage 2: Train Lightweight Classification Head for Component Classification
-def train_classification_head(classifier, train_loader, num_epochs=10, learning_rate=0.001, verbose=True):
-    """
-    Train a classifier head on provided data.
-    
-    Args:
-        classifier (nn.Module): The classifier model to be trained.
-        train_loader (DataLoader): DataLoader for training data.
-        num_epochs (int): Number of epochs to train.
-        learning_rate (float): Learning rate for the optimizer.
-        verbose (bool): If True, prints detailed logs during training.
-        
-    Returns:
-        nn.Module: The trained classifier model.
-    """
+
+# Training function for classification heads
+def train_classification_head(classifier, train_loader, num_epochs=10, learning_rate=0.001):
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(classifier.parameters(), lr=learning_rate)
 
-    # Training loop
     for epoch in range(num_epochs):
         classifier.train()
         running_loss = 0.0
-        for batch_idx, (features, labels) in enumerate(train_loader):
-            # Move data to device
+        for features, labels in train_loader:
             features, labels = features.to(device), labels.to(device)
-            # print(f"Features shape: {features.shape}, Labels shape: {labels.shape}")
-            # Zero the gradients
             optimizer.zero_grad()
-            
-            # Forward pass
             outputs = classifier(features).squeeze(1)
-            # print(f"Classifier outputs shape: {outputs.shape}")
+            # print(f"Outputs shape: {outputs.shape}, Labels shape: {labels.shape}")
             loss = criterion(outputs, labels)
-            
-            # Backward pass and optimization
             loss.backward()
             optimizer.step()
-            
-            # Accumulate loss
             running_loss += loss.item()
-            
-            # Optionally print batch-level details
-            if verbose and batch_idx % 10 == 0:
-                print(f"Epoch [{epoch+1}/{num_epochs}], Batch [{batch_idx + 1}/{len(train_loader)}], Loss: {loss.item():.4f}")
 
-        # Print epoch-level loss
-        print(f"Epoch [{epoch+1}/{num_epochs}], Average Loss: {running_loss/len(train_loader):.4f}")
+        print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {running_loss/len(train_loader):.4f}")
 
     print("Training completed.")
     return classifier
 
 def evaluate_classification_head(classifier, eval_loader):
-    """
-    Evaluate the trained classifier head on provided evaluation data.
-    
-    Args:
-        classifier (nn.Module): The trained classifier model.
-        eval_loader (DataLoader): DataLoader for evaluation data.
-        
-    Returns:
-        dict: Dictionary containing accuracy, precision, recall, and F1 score.
-    """
     classifier.eval()
-    all_preds = []
-    all_labels = []
-    
+    all_preds, all_labels = [], []
     with torch.no_grad():
         for features, labels in eval_loader:
-            # Move data to device
             features, labels = features.to(device), labels.to(device)
-            
-            # Forward pass
-            outputs = classifier(features).squeeze(1)
+            outputs = classifier(features)
             _, preds = torch.max(outputs, 1)
-            
-            # Collect predictions and true labels
             all_preds.extend(preds.cpu().numpy())
             all_labels.extend(labels.cpu().numpy())
-
-    # Calculate evaluation metrics
+    
     accuracy = accuracy_score(all_labels, all_preds)
     precision = precision_score(all_labels, all_preds, average='weighted')
     recall = recall_score(all_labels, all_preds, average='weighted')
     f1 = f1_score(all_labels, all_preds, average='weighted')
     
-    results = {
-        "Accuracy": accuracy,
-        "Precision": precision,
-        "Recall": recall,
-        "F1 Score": f1
-    }
+    print(f"Accuracy: {accuracy:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1 Score: {f1:.4f}")
+    return accuracy, precision, recall, f1
+
+# Main execution script
+if __name__ == "__main__":
+    # Load all meta.csv files from MLAAD and combine them
+    root_dir = "Dataset/mlaad/MLAADv3/fake"  # Update this to MLAAD dataset path
+    combined_meta = load_combined_meta(root_dir)
     
-    # Print results
-    print(f"Evaluation -> Accuracy: {accuracy:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1 Score: {f1:.4f}")
+    # Load frozen MiO model for feature extraction
+    mio_model_path = "mio_model.pth"  # Update this with your MiO model path
+    frozen_mio_model = load_frozen_mio_model(mio_model_path)
     
-    return results
+    # Separate data for acoustic and vocoder tasks
+    acoustic_train_df, acoustic_eval_df = train_test_split(combined_meta, test_size=0.2, stratify=combined_meta["acoustic"])
+    vocoder_train_df, vocoder_eval_df = train_test_split(combined_meta, test_size=0.2, stratify=combined_meta["vocoder"])
 
+    # Define and prepare DataLoaders for both tasks
+    train_loader_acoustic = DataLoader(MLAADDataset(acoustic_train_df, root_dir, frozen_mio_model, label_type="acoustic"), batch_size=16, shuffle=True)
+    eval_loader_acoustic = DataLoader(MLAADDataset(acoustic_eval_df, root_dir, frozen_mio_model, label_type="acoustic"), batch_size=16, shuffle=False)
+    
+    train_loader_vocoder = DataLoader(MLAADDataset(vocoder_train_df, root_dir, frozen_mio_model, label_type="vocoder"), batch_size=16, shuffle=True)
+    eval_loader_vocoder = DataLoader(MLAADDataset(vocoder_eval_df, root_dir, frozen_mio_model, label_type="vocoder"), batch_size=16, shuffle=False)
 
-mlaad_root_dir = "Dataset\mlaad\MLAADv3\\fake"  # Update with your actual MLAAD dataset path
-combined_df = load_all_simpler_meta_files(mlaad_root_dir)
+    # Instantiate classification heads
+    num_acoustic_classes = combined_meta["acoustic"].nunique()
+    num_vocoder_classes = combined_meta["vocoder"].nunique()
+    
+    acoustic_classifier = nn.Sequential(
+        nn.Linear(120, 64),  # Adjust input size as necessary
+        nn.ReLU(),
+        nn.Linear(64, num_acoustic_classes)
+    ).to(device)
+    
+    vocoder_classifier = nn.Sequential(
+        nn.Linear(120, 64),  # Adjust input size as necessary
+        nn.ReLU(),
+        nn.Linear(64, num_vocoder_classes)
+    ).to(device)
 
-X = combined_df[['file_path']]  # Feature (file paths)
-y = combined_df[['acoustic', 'vocoder']]  # Target columns (for stratified split)
+    # Train acoustic classifier
+    print("Training Acoustic Classifier")
+    train_classification_head(acoustic_classifier, train_loader_acoustic)
 
-train_df, eval_df = train_test_split(combined_df, test_size=0.2, stratify=y, random_state=42)
-print("Training and evaluation splits created and saved.")
+    # Train vocoder classifier
+    print("Training Vocoder Classifier")
+    train_classification_head(vocoder_classifier, train_loader_vocoder)
 
-num_acoustic_classes = len(combined_df.acoustic.unique())
-num_vocoder_classes = len(combined_df.vocoder.unique())
+    print("Evaluating Acoustic Classifier")
+    evaluate_classification_head(acoustic_classifier, eval_loader_acoustic)
 
-unique_acoustic_labels = combined_df['acoustic'].unique()
-unique_vocoder_labels = combined_df['vocoder'].unique()
-
-acoustic_label_mapping = {label: idx for idx, label in enumerate(unique_acoustic_labels)}
-vocoder_label_mapping = {label: idx for idx, label in enumerate(unique_vocoder_labels)}
-# Define two separate classifiers for acoustic and vocoder tasks
-acoustic_classifier = ComponentClassifier(input_dim=120, num_classes=num_acoustic_classes).to(device)
-vocoder_classifier = ComponentClassifier(input_dim=120, num_classes=num_vocoder_classes).to(device)
-train_and_save_mio_model()
-mio_model = load_frozen_mio_model()
-# Separate DataLoaders for Acoustic and Vocoder Classification Tasks
-train_loader_acoustic = DataLoader(
-    MLAADDataset(train_df, mlaad_root_dir, mio_model, label_type="acoustic"),
-    batch_size=16, shuffle=True
-)
-eval_loader_acoustic = DataLoader(
-    MLAADDataset(eval_df, mlaad_root_dir, mio_model, label_type="acoustic"),
-    batch_size=16, shuffle=False
-)
-
-train_loader_vocoder = DataLoader(
-    MLAADDataset(train_df, mlaad_root_dir, mio_model, label_type="vocoder"),
-    batch_size=16, shuffle=True
-)
-eval_loader_vocoder = DataLoader(
-    MLAADDataset(eval_df, mlaad_root_dir, mio_model, label_type="vocoder"),
-    batch_size=16, shuffle=False
-)
-
-# Train and evaluate the acoustic classifier
-print("Training Acoustic Classifier:")
-acoustic_classifier = train_classification_head(acoustic_classifier, train_loader_acoustic)
-
-print("Evaluating Acoustic Classifier:")
-evaluate_classification_head(acoustic_classifier, eval_loader_acoustic)
-
-print("Training Vocoder Classifier:")
-vocoder_classifier = train_classification_head(vocoder_classifier, train_loader_vocoder)
-
-print("Evaluating Vocoder Classifier:")
-evaluate_classification_head(vocoder_classifier, eval_loader_vocoder)
+    # Train vocoder classifier
+    print("Evaluating Vocoder Classifier")
+    evaluate_classification_head(vocoder_classifier, eval_loader_vocoder)

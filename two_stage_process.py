@@ -1,6 +1,7 @@
 import os
 import torch
 import pandas as pd
+import numpy as np
 import soundfile as sf
 from torch.utils.data import Dataset, DataLoader
 import torch.nn as nn
@@ -11,12 +12,23 @@ from transformers import WhisperProcessor, WhisperModel, Wav2Vec2FeatureExtracto
 import torch.optim as optim
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-from thesis import MiOModel  # Replace with actual import of MiO model
+from thesis import MiOModel, train_model, evaluate_model  # Replace with actual import of MiO model
+import warnings
+
+warnings.filterwarnings("ignore", message="You are using `torch.load` with `weights_only=False`")
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Load and freeze the MiO model
 def load_frozen_mio_model(model_path):
+    if os.path.exists(model_path):
+        # Load the model if it exists
+        mio_model.load_state_dict(torch.load(model_path))
+        print(f"Model loaded from {model_path}")
+    else:
+        # Train the model if it doesn't exist
+        train_model()
+        evaluate_model()
     mio_model = MiOModel().to(device)
     mio_model.load_state_dict(torch.load(model_path))
     mio_model.eval()  # Set to eval mode
@@ -101,7 +113,7 @@ def load_combined_meta(root_dir):
 
 # Dataset class for MLAAD, caching features if not already cached
 class MLAADDataset(Dataset):
-    def __init__(self, meta_df, root_dir, mio_model, label_type="acoustic", cache_dir="mlaad_cached_features"):
+    def __init__(self, meta_df, root_dir, mio_model, label_type="acoustic", cache_dir="mlaad_cached_features_20"):
         self.data = meta_df
         self.root_dir = root_dir
         self.mio_model = mio_model
@@ -111,6 +123,8 @@ class MLAADDataset(Dataset):
 
         # Create a mapping from label strings to integers
         self.label_mapping = {label: idx for idx, label in enumerate(self.data[self.label_type].unique())}
+        print(f"Initialized MLAADDataset with {len(self.data)} samples.")
+        print(f"Label mapping: {self.label_mapping}")
 
     def __len__(self):
         return len(self.data)
@@ -124,18 +138,22 @@ class MLAADDataset(Dataset):
         
         # Cache file path
         cache_file = os.path.join(self.cache_dir, f"{row['file_path'].replace('/', '_')}.pt")
-        
+
+        # Print status of loading/caching
         if os.path.exists(cache_file):
+            print(f"[{idx}] Loading cached features for: {audio_path}")
             feature_tensor = torch.load(cache_file)
         else:
+            print(f"[{idx}] Extracting features for: {audio_path}")
             feature_tensor = extract_mio_features(audio_path, self.mio_model)
             torch.save(feature_tensor, cache_file)
+            print(f"[{idx}] Cached features saved for: {audio_path}")
         
         return feature_tensor, torch.tensor(label, dtype=torch.long)
 
 
 # Training function for classification heads
-def train_classification_head(classifier, train_loader, num_epochs=10, learning_rate=0.001):
+def train_classification_head(classifier, train_loader, num_epochs=30, learning_rate=0.01):
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(classifier.parameters(), lr=learning_rate)
 
@@ -160,14 +178,35 @@ def train_classification_head(classifier, train_loader, num_epochs=10, learning_
 def evaluate_classification_head(classifier, eval_loader):
     classifier.eval()
     all_preds, all_labels = [], []
+    
     with torch.no_grad():
         for features, labels in eval_loader:
             features, labels = features.to(device), labels.to(device)
+            
+            # Forward pass
             outputs = classifier(features)
-            _, preds = torch.max(outputs, 1)
-            all_preds.extend(preds.cpu().numpy())
+            if outputs.dim() > 2:
+                # Average over the time dimension to get a single prediction per sample
+                outputs = outputs.mean(dim=1)  # Adjust as needed to collapse extra dimensions
+
+            preds = torch.argmax(outputs, dim=1)  # Get the index of the max logit for each sample
+            
+            # Append predictions and labels, ensuring they are 1D arrays
+            all_preds.extend(preds.cpu().numpy())  # Already 1D after argmax
             all_labels.extend(labels.cpu().numpy())
     
+    # Convert lists to numpy arrays and ensure they are flat
+    all_preds = np.array(all_preds).reshape(-1)
+    all_labels = np.array(all_labels).reshape(-1)
+    
+    # Log shapes for debugging
+    print(f"Shapes - Predictions: {all_preds.shape}, Labels: {all_labels.shape}")
+    
+    # Check that both have the same length
+    if all_preds.shape != all_labels.shape:
+        raise ValueError(f"Shape mismatch: Predictions shape {all_preds.shape}, Labels shape {all_labels.shape}")
+    
+    # Evaluate using sklearn metrics
     accuracy = accuracy_score(all_labels, all_preds)
     precision = precision_score(all_labels, all_preds, average='weighted')
     recall = recall_score(all_labels, all_preds, average='weighted')
@@ -183,7 +222,7 @@ if __name__ == "__main__":
     combined_meta = load_combined_meta(root_dir)
     
     # Load frozen MiO model for feature extraction
-    mio_model_path = "mio_model.pth"  # Update this with your MiO model path
+    mio_model_path = "mio_model_30.pth"  # Update this with your MiO model path
     frozen_mio_model = load_frozen_mio_model(mio_model_path)
     
     # Separate data for acoustic and vocoder tasks

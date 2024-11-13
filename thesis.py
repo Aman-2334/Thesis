@@ -57,7 +57,7 @@ def collate_fn(batch):
 train_audio_dir = 'dataset\\ASVspoof2019\\LA\\ASVspoof2019_LA_train\\flac'
 # CSV or TXT with file paths and labels
 train_metadata_path = 'dataset\\ASVspoof2019\\LA\\ASVspoof2019_LA_cm_protocols\\ASVspoof2019.LA.cm.train.trn.txt'
-model_save_path = "mio_model.pth"
+model_save_path = "mio_model_30.pth"
 
 # Initialize the MiO model
 cnn_output_dim = 120  # Output dimension from the CNN feature extractor
@@ -68,7 +68,7 @@ mio_model = MiOModel(cnn_output_dim=cnn_output_dim, output_dim=output_dim).to(de
 criterion = nn.CrossEntropyLoss()  # Suitable for multi-class classification
 optimizer = optim.Adam(mio_model.parameters(), lr=0.001)
 
-num_epochs = 10  # Adjust based on your requirements
+num_epochs = 30  # Adjust based on your requirements
 
 import torch
 import os

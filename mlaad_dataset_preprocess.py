@@ -18,7 +18,7 @@ tts_model_vocoder_map = {
     "facebook/mms-tts-ukr": {"acoustic_model": "Transformer-based TTS", "vocoder": "HiFi-GAN"},
 
     # Griffin-Lim vocoder
-    "griffin_lim": {"acoustic_model": "N/A", "vocoder": "Griffin-Lim"},
+    "griffin_lim": {"acoustic_model": "Unknown", "vocoder": "Griffin-Lim"},
 
     # Microsoft SpeechT5 uses Tacotron-style model with HiFi-GAN vocoder
     "microsoft/speecht5_tts": {"acoustic_model": "Tacotron", "vocoder": "HiFi-GAN"},

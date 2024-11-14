@@ -51,32 +51,37 @@ def preprocess_audio_with_whisper_xlsr(audio_path):
         resampler = torchaudio.transforms.Resample(orig_freq=sample_rate, new_freq=16000).to(device)
         waveform = resampler(waveform)
 
-    # Whisper feature extraction
-    mel_features = whisper_processor.feature_extractor(
-        waveform.cpu().squeeze(0).numpy(),
-        sampling_rate=16000,
-        return_tensors="pt"
-    ).input_features.to(device)
-    
-    with torch.no_grad():
-        whisper_encoder_outputs = whisper_model.encoder(mel_features)
-        whisper_features = whisper_encoder_outputs.last_hidden_state
+    # Define LFCC transformation
+    lfcc_transform = torchaudio.transforms.LFCC(
+        sample_rate=16000,
+        n_lfcc=128,
+        log_lfcc=True
+    ).to(device)  # Ensure LFCC is on the CPU
 
-    # Whisper CNN extraction
-    whisper_cnn_extractor = WhisperCNN(input_dim=whisper_features.shape[2], output_dim=120).to(device)
-    cnn_features_whisper = whisper_cnn_extractor(whisper_features)
+    # Calculate LFCCs with delta and double-delta
+    lfcc = lfcc_transform(waveform.cpu()).squeeze(0)  # [128, Time]
+    delta = torchaudio.functional.compute_deltas(lfcc)  # Delta LFCCs
+    double_delta = torchaudio.functional.compute_deltas(delta)  # Double-delta LFCCs
+    lfcc_combined = torch.cat((lfcc, delta, double_delta), dim=0)  # Concatenate [384, Time]
+
+    # Pad or truncate to a consistent time length
+    target_length = 3000
+    if lfcc_combined.size(1) < target_length:
+        padding = target_length - lfcc_combined.size(1)
+        lfcc_combined = torch.nn.functional.pad(lfcc_combined, (0, padding), mode='constant', value=0)
+    else:
+        lfcc_combined = lfcc_combined[:, :target_length]
+    
+    # Add batch and channel dimensions
+    lfcc_combined = lfcc_combined.unsqueeze(0).to(device)  # Shape: [1, 384, target_length]
+
+    # Whisper feature extraction
+    whisper_cnn_extractor = WhisperCNN(input_dim=384, output_dim=120).to(device)
+    cnn_features_whisper = whisper_cnn_extractor(lfcc_combined)  # Shape: [1, 120, target_length]
 
     # XLS-R feature extraction
-    xlsr_inputs = xlsr_processor(waveform.cpu().squeeze(0).numpy(), sampling_rate=16000, return_tensors="pt", padding=True)
-    xlsr_input_values = xlsr_inputs.input_values.to(device)
-
-    with torch.no_grad():
-        xlsr_outputs = xlsr_model(xlsr_input_values)
-        xlsr_features = xlsr_outputs.last_hidden_state
-
-    # XLS-R CNN extraction
-    xlsr_cnn_extractor = XLSRCNN(input_dim=xlsr_features.shape[2], output_dim=120).to(device)
-    cnn_features_xlsr = xlsr_cnn_extractor(xlsr_features)
+    xlsr_cnn_extractor = XLSRCNN(input_dim=384, output_dim=120).to(device)
+    cnn_features_xlsr = xlsr_cnn_extractor(lfcc_combined)  # Shape: [1, 120, target_length]
 
     return cnn_features_whisper, cnn_features_xlsr
 
@@ -218,7 +223,7 @@ if __name__ == "__main__":
     combined_meta = load_combined_meta(root_dir)
     
     # Load frozen MiO model for feature extraction
-    mio_model_path = "mio_model_30.pth"  # Update this with your MiO model path
+    mio_model_path = "mio_mode.pth"  # Update this with your MiO model path
     frozen_mio_model = load_frozen_mio_model(mio_model_path)
     
     # Separate data for acoustic and vocoder tasks

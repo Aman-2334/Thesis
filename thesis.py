@@ -57,7 +57,7 @@ def collate_fn(batch):
 train_audio_dir = 'dataset\\ASVspoof2019\\LA\\ASVspoof2019_LA_train\\flac'
 # CSV or TXT with file paths and labels
 train_metadata_path = 'dataset\\ASVspoof2019\\LA\\ASVspoof2019_LA_cm_protocols\\ASVspoof2019.LA.cm.train.trn.txt'
-model_save_path = "mio_model_30.pth"
+model_save_path = "mio_mode.pth"
 
 # Initialize the MiO model
 cnn_output_dim = 120  # Output dimension from the CNN feature extractor

@@ -21,16 +21,12 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Load and freeze the MiO model
 def load_frozen_mio_model(model_path):
-    if os.path.exists(model_path):
-        # Load the model if it exists
-        mio_model.load_state_dict(torch.load(model_path))
-        print(f"Model loaded from {model_path}")
-    else:
-        # Train the model if it doesn't exist
+    if not os.path.exists(model_path):
         train_model()
-        evaluate_model()
     mio_model = MiOModel().to(device)
     mio_model.load_state_dict(torch.load(model_path))
+    print(f"Model loaded from {model_path}")
+    evaluate_model(mio_model)
     mio_model.eval()  # Set to eval mode
     for param in mio_model.parameters():
         param.requires_grad = False  # Freeze all parameters

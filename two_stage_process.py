@@ -26,7 +26,7 @@ def load_frozen_mio_model(model_path):
     mio_model = MiOModel().to(device)
     mio_model.load_state_dict(torch.load(model_path))
     print(f"Model loaded from {model_path}")
-    evaluate_model(mio_model)
+    # evaluate_model(mio_model)
     mio_model.eval()  # Set to eval mode
     for param in mio_model.parameters():
         param.requires_grad = False  # Freeze all parameters
@@ -41,6 +41,10 @@ xlsr_model = Wav2Vec2Model.from_pretrained('facebook/wav2vec2-xls-r-1b').to(devi
 xlsr_processor = Wav2Vec2FeatureExtractor.from_pretrained('facebook/wav2vec2-xls-r-1b')
 
 # Function to extract CNN features for a single MLAAD audio file
+import torchaudio
+import torch
+from transformers import WhisperProcessor, WhisperModel, Wav2Vec2Processor, Wav2Vec2Model
+
 def preprocess_audio_with_whisper_xlsr(audio_path):
     # Load audio waveform
     waveform, sample_rate = torchaudio.load(audio_path)
@@ -55,14 +59,14 @@ def preprocess_audio_with_whisper_xlsr(audio_path):
     lfcc_transform = torchaudio.transforms.LFCC(
         sample_rate=16000,
         n_lfcc=128,
-        log_lfcc=True
-    ).to(device)  # Ensure LFCC is on the CPU
+        speckwargs={"n_fft": 512, "hop_length": 160, "win_length": 400}
+    ).to(device)
 
     # Calculate LFCCs with delta and double-delta
-    lfcc = lfcc_transform(waveform.cpu()).squeeze(0)  # [128, Time]
+    lfcc = lfcc_transform(waveform).squeeze(0)  # [128, Time]
     delta = torchaudio.functional.compute_deltas(lfcc)  # Delta LFCCs
     double_delta = torchaudio.functional.compute_deltas(delta)  # Double-delta LFCCs
-    lfcc_combined = torch.cat((lfcc, delta, double_delta), dim=0)  # Concatenate [384, Time]
+    lfcc_combined = torch.cat((lfcc, delta, double_delta), dim=0)  # Concatenate to [384, Time]
 
     # Pad or truncate to a consistent time length
     target_length = 3000
@@ -72,8 +76,11 @@ def preprocess_audio_with_whisper_xlsr(audio_path):
     else:
         lfcc_combined = lfcc_combined[:, :target_length]
     
-    # Add batch and channel dimensions
+    # Add batch dimension and permute to [batch_size, input_channels, sequence_length]
     lfcc_combined = lfcc_combined.unsqueeze(0).to(device)  # Shape: [1, 384, target_length]
+    # lfcc_combined = lfcc_combined.permute(0,2,1)
+    # Check and print shapes before passing to CNN extractor
+    print(f"LFCC combined shape after padding: {lfcc_combined.shape}")  # Should be [1, 384, target_length]
 
     # Whisper feature extraction
     whisper_cnn_extractor = WhisperCNN(input_dim=384, output_dim=120).to(device)
@@ -84,6 +91,7 @@ def preprocess_audio_with_whisper_xlsr(audio_path):
     cnn_features_xlsr = xlsr_cnn_extractor(lfcc_combined)  # Shape: [1, 120, target_length]
 
     return cnn_features_whisper, cnn_features_xlsr
+
 
 # Feature extraction function using the frozen MiO model
 def extract_mio_features(audio_path, mio_model):
@@ -114,7 +122,7 @@ def load_combined_meta(root_dir):
 
 # Dataset class for MLAAD, caching features if not already cached
 class MLAADDataset(Dataset):
-    def __init__(self, meta_df, root_dir, mio_model, label_type="acoustic", cache_dir="mlaad_cached_features_20"):
+    def __init__(self, meta_df, root_dir, mio_model, label_type="acoustic", cache_dir="mlaad_cached_features"):
         self.data = meta_df
         self.root_dir = root_dir
         self.mio_model = mio_model

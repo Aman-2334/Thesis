@@ -95,10 +95,6 @@ class CNNFeatureExtractor(nn.Module):
 
     def forward(self, x):
         # Input shape: [batch_size, seq_length, input_dim]
-        # Rearrange to [batch_size, input_dim, seq_length] for Conv1d
-        # print(f"Input to CNN extractor before permute: {x.shape}")
-        x = x.permute(0, 1, 2)  # Change shape to [batch_size, input_dim, seq_length]
-        # print(f"Input to CNN extractor after permute: {x.shape}")
         # Apply the 1D CNN and MaxPool
         x = self.cnn(x)
         

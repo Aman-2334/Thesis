@@ -70,8 +70,6 @@ class CNNFeatureExtractor(nn.Module):
 
     def forward(self, x):
         # Input shape: [batch_size, seq_length, input_dim]
-        # Rearrange to [batch_size, input_dim, seq_length] for Conv1d
-        x = x.permute(0, 2, 1)  # Change shape to [batch_size, input_dim, seq_length]
         
         # Apply the 1D CNN and MaxPool
         x = self.cnn(x)
@@ -99,6 +97,7 @@ def xlsr_batch_generator(dataloader, cache_dir='cache_xlsr_batches'):
         # Forward pass through XLS-R and CNN extractor
         xlsr_outputs = xlsr_model(input_values)
         xlsr_features = xlsr_outputs.last_hidden_state
+        xlsr_features = xlsr_features.permute(0, 2, 1) 
         cnn_features = cnn_extractor(xlsr_features)
 
         # Move features and labels to CPU before saving

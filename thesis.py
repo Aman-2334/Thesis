@@ -177,7 +177,7 @@ test_audio_dir = 'dataset\\ASVspoof2019\\LA\\ASVspoof2019_LA_eval\\flac'
 # CSV or TXT with file paths and labels
 test_metadata_path = 'dataset\\ASVspoof2019\\LA\\ASVspoof2019_LA_cm_protocols\\ASVspoof2019.LA.cm.eval.trl.txt'
 
-def evaluate_model():
+def evaluate_model(mio_model):
     batch_size = 16
     dataset_whisper = ASVspoofWhisperDataset(test_audio_dir, test_metadata_path)
     dataloader_whisper = DataLoader(dataset_whisper, batch_size=batch_size, shuffle=False)

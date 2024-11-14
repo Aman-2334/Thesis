@@ -80,7 +80,7 @@ def preprocess_audio_with_whisper_xlsr(audio_path):
     lfcc_combined = lfcc_combined.unsqueeze(0).to(device)  # Shape: [1, 384, target_length]
     # lfcc_combined = lfcc_combined.permute(0,2,1)
     # Check and print shapes before passing to CNN extractor
-    print(f"LFCC combined shape after padding: {lfcc_combined.shape}")  # Should be [1, 384, target_length]
+    # print(f"LFCC combined shape after padding: {lfcc_combined.shape}")  # Should be [1, 384, target_length]
 
     # Whisper feature extraction
     whisper_cnn_extractor = WhisperCNN(input_dim=384, output_dim=120).to(device)
@@ -122,16 +122,14 @@ def load_combined_meta(root_dir):
 
 # Dataset class for MLAAD, caching features if not already cached
 class MLAADDataset(Dataset):
-    def __init__(self, meta_df, root_dir, mio_model, label_type="acoustic", cache_dir="mlaad_cached_features"):
+    def __init__(self, meta_df, root_dir, mio_model, label_type="acoustic", cache_dir="mlaad_cached_features", label_mapping=None):
         self.data = meta_df
         self.root_dir = root_dir
         self.mio_model = mio_model
         self.label_type = label_type
         self.cache_dir = cache_dir
+        self.label_mapping = label_mapping
         os.makedirs(cache_dir, exist_ok=True)
-
-        # Create a mapping from label strings to integers
-        self.label_mapping = {label: idx for idx, label in enumerate(self.data[self.label_type].unique())}
         print(f"Initialized MLAADDataset with {len(self.data)} samples.")
         print(f"Label mapping: {self.label_mapping}")
 
@@ -150,13 +148,13 @@ class MLAADDataset(Dataset):
 
         # Print status of loading/caching
         if os.path.exists(cache_file):
-            print(f"[{idx}] Loading cached features for: {audio_path}")
+            # print(f"[{idx}] Loading cached features for: {audio_path}")
             feature_tensor = torch.load(cache_file)
         else:
-            print(f"[{idx}] Extracting features for: {audio_path}")
+            # print(f"[{idx}] Extracting features for: {audio_path}")
             feature_tensor = extract_mio_features(audio_path, self.mio_model)
             torch.save(feature_tensor, cache_file)
-            print(f"[{idx}] Cached features saved for: {audio_path}")
+            # print(f"[{idx}] Cached features saved for: {audio_path}")
         
         return feature_tensor, torch.tensor(label, dtype=torch.long)
 
@@ -237,13 +235,19 @@ if __name__ == "__main__":
     # Separate data for acoustic and vocoder tasks
     acoustic_train_df, acoustic_eval_df = train_test_split(combined_meta, test_size=0.2, stratify=combined_meta["acoustic"])
     vocoder_train_df, vocoder_eval_df = train_test_split(combined_meta, test_size=0.2, stratify=combined_meta["vocoder"])
+    
+    all_labels = sorted(set(acoustic_train_df["acoustic"].unique()).union(set(acoustic_eval_df["acoustic"].unique())))
+    acoustic_label_mapping = {label: idx for idx, label in enumerate(all_labels)}
+
+    all_labels = sorted(set(vocoder_train_df["vocoder"].unique()).union(set(vocoder_eval_df["vocoder"].unique())))
+    vocoder_label_mapping = {label: idx for idx, label in enumerate(all_labels)}
 
     # Define and prepare DataLoaders for both tasks
-    train_loader_acoustic = DataLoader(MLAADDataset(acoustic_train_df, root_dir, frozen_mio_model, label_type="acoustic"), batch_size=16, shuffle=True)
-    eval_loader_acoustic = DataLoader(MLAADDataset(acoustic_eval_df, root_dir, frozen_mio_model, label_type="acoustic"), batch_size=16, shuffle=False)
+    train_loader_acoustic = DataLoader(MLAADDataset(acoustic_train_df, root_dir, frozen_mio_model, label_type="acoustic",label_mapping=acoustic_label_mapping), batch_size=16, shuffle=True)
+    eval_loader_acoustic = DataLoader(MLAADDataset(acoustic_eval_df, root_dir, frozen_mio_model, label_type="acoustic",label_mapping=acoustic_label_mapping), batch_size=16, shuffle=False)
     
-    train_loader_vocoder = DataLoader(MLAADDataset(vocoder_train_df, root_dir, frozen_mio_model, label_type="vocoder"), batch_size=16, shuffle=True)
-    eval_loader_vocoder = DataLoader(MLAADDataset(vocoder_eval_df, root_dir, frozen_mio_model, label_type="vocoder"), batch_size=16, shuffle=False)
+    train_loader_vocoder = DataLoader(MLAADDataset(vocoder_train_df, root_dir, frozen_mio_model, label_type="vocoder",label_mapping=vocoder_label_mapping), batch_size=16, shuffle=True)
+    eval_loader_vocoder = DataLoader(MLAADDataset(vocoder_eval_df, root_dir, frozen_mio_model, label_type="vocoder",label_mapping=vocoder_label_mapping), batch_size=16, shuffle=False)
 
     # Instantiate classification heads
     num_acoustic_classes = combined_meta["acoustic"].nunique()
